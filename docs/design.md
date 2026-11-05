@@ -1,4 +1,4 @@
-# ConMonO 설계 문서
+# Glasspod 설계 문서
 
 작성 2026-11-05 · 상태: 초안
 
@@ -16,7 +16,7 @@
 
 ## 2. 목표와 범위
 
-ConMonO는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 개발자가 보고, 그 판단으로 쿠버네티스 API를 호출해 조치하는 개발 도구**입니다. 쿠버네티스는 컨테이너를 알고, ConMonO는 앱을 압니다.
+Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 개발자가 보고, 그 판단으로 쿠버네티스 API를 호출해 조치하는 개발 도구**입니다. 쿠버네티스는 컨테이너를 알고, Glasspod는 앱을 압니다.
 
 하는 일:
 
@@ -47,6 +47,7 @@ ConMonO는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 개
 
 | 항목 | 결정 | 상태 |
 | --- | --- | --- |
+| 이름 | Glasspod. 브랜드는 12장 | 확정 (2026-11-05) |
 | 관찰 범위 | 앱 수준까지. 앱에 SDK를 넣어 수집 | 확정 (2026-11-05) |
 | 동작 방식 | 도구가 앱을 지켜보고, 그 판단으로 쿠버네티스 API를 호출 | 확정 (2026-11-05) |
 | 조치 실행 | 기본은 개발자가 화면에서 버튼을 누름. 규칙을 정해 두면 자동 실행 | 확정 (2026-11-05) |
@@ -67,8 +68,8 @@ ConMonO는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 개
 [Pod 안: 내 앱 + SDK]
    |  (1) 앱 내부 상태를 보냄 (push, WebSocket)
    v
-[ConMonO 서버] <-- (2) Kubernetes API를 watch해 Pod, Deployment 상태를 받음
-   |           --> (4) 조치가 정해지면 Kubernetes API 호출
+[Glasspod 서버] <-- (2) Kubernetes API를 watch해 Pod, Deployment 상태를 받음
+   |            --> (4) 조치가 정해지면 Kubernetes API 호출
    v
 [웹 화면]  (3) 개발자가 보고, 버튼을 누르면 서버로 요청
 ```
@@ -76,7 +77,7 @@ ConMonO는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 개
 | 구성 요소 | 위치 | 역할 |
 | --- | --- | --- |
 | SDK | 감시 대상 앱 안 (라이브러리) | 앱 내부 상태 수집, 서버로 전송, 서버 요청에 응답 |
-| ConMonO 서버 | 클러스터 안 Deployment | SDK 연결 수신, 쿠버네티스 watch, 상태 결합·판단, 규칙 평가, 조치 실행과 기록 |
+| Glasspod 서버 | 클러스터 안 Deployment | SDK 연결 수신, 쿠버네티스 watch, 상태 결합·판단, 규칙 평가, 조치 실행과 기록 |
 | 웹 화면 | 개발자 브라우저 | 목록·상세 표시, 조치 버튼, 규칙 관리 |
 | Kubernetes API | 클러스터 (기존) | 클러스터 상태 제공, 조치 수행 |
 
@@ -292,8 +293,8 @@ SDK (앱 안)                         서버
 
 ```yaml
 env:
-  - name: CONMONO_SERVER
-    value: ws://conmono-server.conmono.svc.cluster.local:8080/agent
+  - name: GLASSPOD_SERVER
+    value: ws://glasspod-server.glasspod.svc.cluster.local:8080/agent
   - name: POD_NAME
     valueFrom: { fieldRef: { fieldPath: metadata.name } }
   - name: POD_NAMESPACE
@@ -303,12 +304,12 @@ env:
 앱 코드에서 SDK를 쓰는 모습입니다. 패키지 이름과 API는 가칭입니다.
 
 ```js
-import { conmono } from '@conmono/sdk';
+import { glasspod } from '@glasspod/sdk';
 
-conmono.start();                                       // 환경변수에서 서버 주소와 Pod 정보를 읽음
-app.use(conmono.express());                            // HTTP 요청 자동 수집
-conmono.gauge('app.queue.length', () => queue.length); // 앱 고유 값 등록
-conmono.state('app.mode', 'ready');                    // 상태 등록, 바뀌면 state 이벤트 전송
+glasspod.start();                                       // 환경변수에서 서버 주소와 Pod 정보를 읽음
+app.use(glasspod.express());                            // HTTP 요청 자동 수집
+glasspod.gauge('app.queue.length', () => queue.length); // 앱 고유 값 등록
+glasspod.state('app.mode', 'ready');                    // 상태 등록, 바뀌면 state 이벤트 전송
 ```
 
 ## 9. 보안
@@ -337,3 +338,57 @@ conmono.state('app.mode', 'ready');                    // 상태 등록, 바뀌�
 - 히스토그램 지표
 - 장기 보관용 DB
 - 지표 메시지 줄이기: 이름과 `kind`를 `hello`에서 한 번만 알리기
+
+## 12. 브랜드
+
+2026-11-05 확정. 세 시안(Glasspod, Porthole, Podscope) 가운데 골랐습니다.
+
+| 항목 | 결정 |
+| --- | --- |
+| 이름 | Glasspod (글래스팟) |
+| 바꾼 이유 | 작업명 ConMonO는 같은 분야의 컨테이너 런타임 모니터 conmon(`containers/conmon`, Podman과 CRI-O가 사용)과 글자 하나만 달라 검색에 섞이고 파생 프로젝트로 오해받기 쉬움 |
+| 뜻 | 오케스트레이터에게 컨테이너는 블랙박스지만, Glasspod는 Pod를 유리 상자처럼 들여다보게 함 |
+| 태그라인 | See inside your pods · Pod 속까지 투명하게 |
+| 표기 | 문서와 화면 제목은 `Glasspod`. 저장소, 패키지, namespace는 소문자 `glasspod`, 환경변수는 `GLASSPOD_*` |
+| 분위기 | 밝고 맑음, 투명함, 가벼움. 경고만 코랄색으로 튀게 해 이상한 Pod가 바로 눈에 띄게 함 |
+
+### 로고
+
+육각형은 Pod, 그 안의 맥박선은 들여다보이는 앱 상태를 뜻합니다.
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <polygon points="32,6 54.5,19 54.5,45 32,58 9.5,45 9.5,19"
+           fill="#D9F3F7" stroke="#0E9DB5" stroke-width="3" stroke-linejoin="round"/>
+  <polyline points="16,34 24,34 28,24 34,44 38,30 42,34 48,34"
+            fill="none" stroke="#0B5F6E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+```
+
+글자 로고는 소문자 `glasspod`를 Manrope(굵기 500), Deep teal로 씁니다.
+
+### 색
+
+| 이름 | 값 | 쓰임 |
+| --- | --- | --- |
+| Deep teal | `#0B5F6E` | 글자 로고, 제목, 주요 버튼 |
+| Glass cyan | `#0E9DB5` | 로고 테두리, 강조, 링크 |
+| Mist | `#D9F3F7` | 로고 면, 선택된 항목 배경 |
+| Paper | `#F7FBFC` | 페이지 배경 |
+| Coral | `#FF7A59` | 경고, 이상한 Pod 강조 |
+
+다크 모드 색은 아직 정하지 않았습니다. 웹 화면 작업 때 정합니다.
+
+### 글꼴
+
+| 쓰임 | 글꼴 |
+| --- | --- |
+| 글자 로고 | Manrope |
+| 화면 본문 (한글, 영문) | Pretendard |
+| 지표 숫자, 코드 | JetBrains Mono |
+
+### 이름 사용 가능 여부 (2026-11-05 확인)
+
+- npm: `glasspod`, `@glasspod/sdk` 모두 등록되어 있지 않음
+- GitHub: `glasspod` 계정·조직 없음. 같은 이름의 저장소는 설명 없는 개인 저장소 하나(별 1개)
+- 웹 검색으로 같은 이름의 쿠버네티스 도구를 찾지 못함. 상표 검토는 하지 않음
