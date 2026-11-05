@@ -3,6 +3,9 @@ CLAUDE.md
 CLAUDE.local.md
 .claude/settings.local.json
 
+# 작업 목록 (로컬 전용, 커밋하지 않음). 루트의 TODO.md만 해당
+/TODO.md
+
 # 의존성
 node_modules/
 

@@ -81,7 +81,6 @@ glasspod.state('app.mode', 'ready');                    // 상태 등록, 바뀌
 | 문서 | 내용 |
 | --- | --- |
 | [docs/design.md](docs/design.md) | 설계: 구성, 동작, 프로토콜, 결정 사항 |
-| [TODO.md](TODO.md) | 작업 목록과 진행 상황 |
 | [docs/logs/](docs/logs/) | 일자별 작업 기록 |
 
 기술 스택(예정): Node.js 22, TypeScript, Express + `ws`, React + Vite, Vitest, npm workspaces
