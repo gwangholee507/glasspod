@@ -1,0 +1,40 @@
+# Claude Code 작업 규칙 (로컬 전용, 커밋하지 않음)
+CLAUDE.md
+CLAUDE.local.md
+.claude/settings.local.json
+
+# 의존성
+node_modules/
+
+# 빌드 결과
+dist/
+build/
+*.tsbuildinfo
+
+# 테스트 커버리지
+coverage/
+
+# 환경변수 (예시 파일만 커밋)
+.env
+.env.*
+!.env.example
+
+# 로그
+*.log
+npm-debug.log*
+
+# 진단 파일 (데모 앱에서 만든 힙 스냅샷, 프로파일)
+*.heapsnapshot
+*.cpuprofile
+
+# 쿠버네티스 접속 정보
+*.kubeconfig
+kubeconfig
+
+# 공유·보고용으로 내보낸 파일
+exports/
+
+# OS, 편집기
+.DS_Store
+.vscode/
+.idea/
