@@ -1,0 +1,13 @@
+{
+  "name": "@glasspod/server",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --conditions=@glasspod/source src/index.ts"
+  },
+  "dependencies": {
+    "@glasspod/protocol": "0.0.0"
+  }
+}

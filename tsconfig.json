@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/protocol" },
+    { "path": "packages/sdk-node" },
+    { "path": "apps/server" },
+    { "path": "apps/web" },
+    { "path": "examples/demo-app" }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "name": "glasspod",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "examples/*"
+  ],
+  "engines": {
+    "node": "22.22.0"
+  },
+  "scripts": {
+    "typecheck": "tsc -b",
+    "clean": "tsc -b --clean && rm -rf packages/*/dist apps/*/dist examples/*/dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "dev:server": "npm run dev -w @glasspod/server"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "prettier": "3.9.10",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
+  }
+}

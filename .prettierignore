@@ -1,0 +1,7 @@
+# .gitignore에 있는 파일(node_modules/, dist/ 등)은 Prettier가 따로 건너뜁니다.
+
+# 문서는 직접 정리합니다. 표 정렬이 통째로 바뀌지 않게 Prettier에서 뺍니다.
+*.md
+
+# npm이 만드는 파일
+package-lock.json

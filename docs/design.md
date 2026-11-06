@@ -59,6 +59,7 @@ Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 �
 | 두 번째 SDK | Spring Boot | 후보 |
 | 서버 | Node.js + TypeScript, Express + `ws` | 확정 (2026-11-05) |
 | 웹 화면 | React + Vite | 확정 (2026-11-05) |
+| 저장소 구성 | npm workspaces 모노레포, ESM만 사용. 패키지 이름은 `@glasspod/protocol`, `@glasspod/sdk`, `@glasspod/server`, `@glasspod/web`, `@glasspod/demo-app`. 자세한 내용은 `docs/guides/T01.md` | 확정 (2026-11-05) |
 | 1차 범위 | 2장의 핵심 기능. 자동 규칙은 확장 기능 | 확정 (2026-11-05) |
 | 서버 데이터 보관 | 10장 | 미정 |
 
