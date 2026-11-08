@@ -8,6 +8,8 @@
     "dev": "tsx watch --conditions=@glasspod/source src/index.ts"
   },
   "dependencies": {
-    "@glasspod/protocol": "0.0.0"
+    "@glasspod/protocol": "0.0.0",
+    "express": "5.3.0",
+    "ws": "8.22.0"
   }
 }

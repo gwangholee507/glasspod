@@ -59,6 +59,7 @@ Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 �
 | 스키마와 타입 | JSON Schema(draft-07) 파일이 기준. json-schema-to-typescript로 TypeScript 타입을 만들고(생성한 파일은 커밋), Ajv로 검증. 자세한 내용은 `docs/guides/T02.md` | 확정 (2026-11-08) |
 | 두 번째 SDK | Spring Boot | 후보 |
 | 서버 | Node.js + TypeScript, Express + `ws` | 확정 (2026-11-05) |
+| 서버 설정과 로그 | 설정은 환경변수(`GLASSPOD_PORT` 등)로 받고 없으면 기본값을 씀. 로그는 한 줄 텍스트(`console`). 연결 규칙은 `docs/guides/T03.md` | 확정 (2026-11-08) |
 | 웹 화면 | React + Vite | 확정 (2026-11-05) |
 | 저장소 구성 | npm workspaces 모노레포, ESM만 사용. 패키지 이름은 `@glasspod/protocol`, `@glasspod/sdk`, `@glasspod/server`, `@glasspod/web`, `@glasspod/demo-app`. 자세한 내용은 `docs/guides/T01.md` | 확정 (2026-11-05) |
 | 1차 범위 | 2장의 핵심 기능. 자동 규칙은 확장 기능 | 확정 (2026-11-05) |
@@ -177,6 +178,7 @@ SDK (앱 안)                         서버
 - 프로토콜 버전은 `hello`에서 한 번만 알립니다.
 - 메시지 형식은 JSON Schema(draft-07)로 정의합니다. 기준 파일은 `packages/protocol/schema/`에 있습니다(SDK → 서버, 서버 → SDK, snapshot 응답). 필수 필드와 값의 범위는 이 파일을 따르고, 요약은 `docs/guides/T02.md`의 '필드 규칙'에 있습니다. Node SDK와 서버는 여기서 타입을 만들어 쓰고, 다른 언어의 SDK도 같은 스키마를 따릅니다.
 - 받는 쪽은 모르는 필드를 무시합니다. 필드를 추가할 때는 버전을 올리지 않고, 필드를 없애거나 의미를 바꿀 때 `protocol` 번호를 올립니다.
+- 서버는 `hello`를 받아들인 뒤 검증에 실패한 메시지를 무시하고 연결을 유지합니다. SDK 버그 하나로 그 Pod의 다른 데이터까지 잃지 않게 하려는 것입니다.
 
 ### 7.3 메시지
 
@@ -208,8 +210,13 @@ SDK (앱 안)                         서버
 { "type": "reject", "reason": "unknown-pod" }
 ```
 
-- 보내는 주기와 한도를 서버가 정합니다. push 방식이어도 서버가 부하를 조절할 수 있습니다.
-- `reject`를 보낸 뒤 서버는 연결을 닫습니다.
+- 보내는 주기와 한도를 서버가 정합니다. push 방식이어도 서버가 부하를 조절할 수 있습니다. 두 값은 서버 환경변수 `GLASSPOD_METRICS_INTERVAL_MS`(기본 5000), `GLASSPOD_MAX_EVENTS_PER_MINUTE`(기본 120)로 정합니다.
+- `reject`를 보낸 뒤 서버는 연결을 닫습니다(종료 코드 1008).
+- `reason`의 종류
+  - `invalid-hello`: 첫 메시지가 올바른 `hello`가 아님
+  - `unsupported-protocol`: `protocol`이 서버가 아는 버전이 아님
+  - `hello-timeout`: 연결한 뒤 10초 동안 `hello`가 없음
+  - `unknown-pod`: 쿠버네티스에 없는 Pod (9장 신원 확인, T25)
 
 #### metrics (SDK → 서버, 정해진 주기마다)
 
