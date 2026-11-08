@@ -74,7 +74,7 @@ glasspod.state('app.mode', 'ready');                    // 상태 등록, 바뀌
 
 ## 현재 상태
 
-설계를 마치고 구현을 시작했습니다. 지금은 모노레포 골격(npm workspaces, TypeScript, Vitest)만 있고, SDK·서버·웹 화면은 아직 비어 있습니다.
+설계를 마치고 구현을 시작했습니다. 지금은 모노레포 골격(npm workspaces, TypeScript, Vitest)과 SDK–서버 프로토콜 v1(JSON Schema, 스키마에서 만든 타입, 메시지 검증)이 있습니다. SDK·서버·웹 화면은 아직 비어 있습니다.
 
 첫 마일스톤은 [대표 시나리오](docs/design.md#6-대표-시나리오-pod-하나가-느려질-때)를 로컬 클러스터에서 처음부터 끝까지 돌려 보는 것입니다. 느려진 Pod 하나를 화면에서 찾고, 트래픽에서 뺀 채로 원인을 확인한 뒤 삭제합니다.
 
@@ -84,7 +84,7 @@ glasspod.state('app.mode', 'ready');                    // 상태 등록, 바뀌
 | [docs/guides/](docs/guides/) | 작업별 지침서: 범위와 완료 기준 |
 | [docs/logs/](docs/logs/) | 일자별 작업 기록 |
 
-기술 스택: Node.js 22, TypeScript, Vitest, npm workspaces. 예정: Express + `ws`, React + Vite
+기술 스택: Node.js 22, TypeScript, Vitest, npm workspaces, JSON Schema(Ajv). 예정: Express + `ws`, React + Vite
 
 ## 라이선스
 

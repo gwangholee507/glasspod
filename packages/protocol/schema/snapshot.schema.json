@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SnapshotData",
+  "description": "snapshot 요청에 대한 답(response의 data)입니다(design.md 7.3).",
+  "type": "object",
+  "required": ["state", "inFlight", "process"],
+  "properties": {
+    "state": {
+      "description": "등록된 상태 값입니다. 예: { \"app.mode\": \"draining\" }",
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "inFlight": {
+      "description": "진행 중인 요청과 경과 시간입니다.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["route", "elapsedMs"],
+        "properties": {
+          "route": { "type": "string" },
+          "elapsedMs": { "type": "number", "minimum": 0 }
+        }
+      }
+    },
+    "process": {
+      "description": "프로세스 정보입니다.",
+      "type": "object",
+      "required": ["uptimeSec", "heapUsedBytes"],
+      "properties": {
+        "uptimeSec": { "type": "number", "minimum": 0 },
+        "heapUsedBytes": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

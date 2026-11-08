@@ -19,10 +19,12 @@
     "test:watch": "vitest",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "generate": "npm run generate -w @glasspod/protocol",
     "dev:server": "npm run dev -w @glasspod/server"
   },
   "devDependencies": {
     "@types/node": "22.20.5",
+    "json-schema-to-typescript": "16.0.0",
     "prettier": "3.9.10",
     "tsx": "4.23.15",
     "typescript": "7.0.2",

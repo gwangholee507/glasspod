@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ServerMessage",
+  "description": "서버가 SDK로 보내는 메시지입니다(design.md 7.3). 공통 필드는 type 하나뿐입니다.",
+  "type": "object",
+  "required": ["type"],
+  "discriminator": { "propertyName": "type" },
+  "oneOf": [
+    { "$ref": "#/definitions/Welcome" },
+    { "$ref": "#/definitions/Reject" },
+    { "$ref": "#/definitions/Request" }
+  ],
+  "definitions": {
+    "Welcome": {
+      "title": "WelcomeMessage",
+      "description": "hello를 받아들였을 때 보냅니다. 보내는 주기와 한도를 서버가 정합니다.",
+      "type": "object",
+      "required": ["type", "metricsIntervalMs", "maxEventsPerMinute"],
+      "properties": {
+        "type": { "const": "welcome" },
+        "metricsIntervalMs": {
+          "description": "metrics를 보내는 주기(ms)입니다.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxEventsPerMinute": {
+          "description": "1분에 보낼 수 있는 event 수입니다. 넘으면 SDK가 같은 이벤트를 묶습니다.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "Reject": {
+      "title": "RejectMessage",
+      "description": "hello를 거절할 때 보냅니다. 보낸 뒤 서버는 연결을 닫습니다.",
+      "type": "object",
+      "required": ["type", "reason"],
+      "properties": {
+        "type": { "const": "reject" },
+        "reason": {
+          "description": "거절 이유입니다. 예: unknown-pod",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "Request": {
+      "title": "RequestMessage",
+      "description": "정보 조회 요청입니다. 앱 상태를 바꾸는 요청은 만들지 않습니다.",
+      "type": "object",
+      "required": ["type", "id", "action"],
+      "properties": {
+        "type": { "const": "request" },
+        "id": {
+          "description": "요청 id입니다. SDK는 response의 replyTo에 그대로 넣습니다.",
+          "type": "string",
+          "minLength": 1
+        },
+        "action": {
+          "description": "요청 종류입니다. v1은 snapshot 하나입니다. 모르는 action이면 SDK는 ok를 false로 답합니다.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
