@@ -60,6 +60,7 @@ Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 �
 | 두 번째 SDK | Spring Boot | 후보 |
 | 서버 | Node.js + TypeScript, Express + `ws` | 확정 (2026-11-05) |
 | 서버 설정과 로그 | 설정은 환경변수(`GLASSPOD_PORT` 등)로 받고 없으면 기본값을 씀. 로그는 한 줄 텍스트(`console`). 연결 규칙은 `docs/guides/T03.md` | 확정 (2026-11-08) |
+| SDK 연결 (Node) | Node 내장 `WebSocket`을 씀(의존성 추가 없음). 설정 값이 없거나 잘못되면 SDK를 끄고 경고 한 줄. 로그는 중요한 것만 표준 오류에 한 줄, 자세한 것은 `NODE_DEBUG=glasspod`. 앱 이름·버전은 `start()` 옵션. 연결 규칙은 `docs/guides/T04.md` | 확정 (2026-11-09) |
 | 웹 화면 | React + Vite | 확정 (2026-11-05) |
 | 저장소 구성 | npm workspaces 모노레포, ESM만 사용. 패키지 이름은 `@glasspod/protocol`, `@glasspod/sdk`, `@glasspod/server`, `@glasspod/web`, `@glasspod/demo-app`. 자세한 내용은 `docs/guides/T01.md` | 확정 (2026-11-05) |
 | 1차 범위 | 2장의 핵심 기능. 자동 규칙은 확장 기능 | 확정 (2026-11-05) |
@@ -101,6 +102,7 @@ SDK가 앱을 망치면 안 됩니다. 다음을 지킵니다.
 - 수집과 전송은 가볍게 합니다. Node.js에서는 SDK도 앱과 같은 이벤트 루프를 쓰므로 힙 스냅샷 같은 무거운 작업은 하지 않습니다.
 - 메모리 사용에 상한을 둡니다. 보내지 못한 데이터는 정해진 양만 들고 있습니다.
 - 앱의 종료 동작을 바꾸지 않습니다. 처리되지 않은 예외를 잡으면 서버로 보낸 뒤(최대 1초 대기) 원래대로 종료하고, 종료 시그널(SIGTERM) 처리는 가로채지 않습니다.
+  - 예외(2026-11-09): Node SDK는 Node 내장 `WebSocket`을 쓰는데, 열린 연결을 `unref()`할 방법이 없어 연결된 동안에는 이벤트 루프가 비지 않습니다. 이벤트 루프가 비기를 기다려 끝나는 앱은 종료 처리에서 `glasspod.stop()`을 부릅니다. SIGTERM을 처리하지 않는 앱과 `process.exit()`를 부르는 앱은 영향이 없습니다. SDK의 타이머는 모두 `unref()`하므로 연결이 끊긴 동안에는 앱 종료를 막지 않습니다.
 
 ### 5.2 서버
 
@@ -283,7 +285,9 @@ SDK (앱 안)                         서버
 
 ### 7.4 연결이 끊겼을 때 (SDK)
 
-- **재연결 간격**: 1초, 2초, 4초…로 늘려 최대 30초까지 기다리고, 무작위 지연을 더합니다. 서버가 재시작될 때 모든 Pod가 한꺼번에 몰려오지 않게 하려는 것입니다.
+- **재연결 간격**: 1초, 2초, 4초…로 늘려 최대 30초까지 기다리고, 0~1초 무작위 지연을 더합니다. 서버가 재시작될 때 모든 Pod가 한꺼번에 몰려오지 않게 하려는 것입니다. `welcome`을 받으면 다시 1초부터 셉니다.
+- **제한 시간**: 연결 시도 뒤 10초 안에 열리지 않거나, `hello`를 보낸 뒤 10초 안에 `welcome`이 없으면 끊고 다시 시도합니다.
+- **reject**: 이유와 상관없이 같은 간격으로 다시 시도합니다. 서버를 고치거나 새 버전으로 올리면 SDK가 스스로 다시 붙습니다.
 - **끊긴 동안의 데이터**
   - event는 최대 500개까지 들고 있다가 넘치면 오래된 것부터 버립니다.
   - metrics는 쌓지 않고 최신 값 하나만 유지합니다. counter가 누적값이라 최신 값 하나면 충분합니다.
@@ -313,15 +317,18 @@ env:
     valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
 ```
 
-앱 코드에서 SDK를 쓰는 모습입니다. 패키지 이름과 API는 가칭입니다.
+세 값 가운데 하나라도 없거나 `GLASSPOD_SERVER`가 `ws://`·`wss://` 주소가 아니면 SDK는 경고 한 줄을 남기고 꺼지며, 앱은 그대로 동작합니다.
+
+앱 코드에서 SDK를 쓰는 모습입니다. `start()`와 `stop()`은 T04에서 만들었고, 나머지 API는 가칭입니다.
 
 ```js
 import { glasspod } from '@glasspod/sdk';
 
-glasspod.start();                                       // 환경변수에서 서버 주소와 Pod 정보를 읽음
+glasspod.start({ app: { name: 'orders', version: '1.4.2' } }); // 환경변수에서 서버 주소와 Pod 정보를 읽음. app은 선택
 app.use(glasspod.express());                            // HTTP 요청 자동 수집
 glasspod.gauge('app.queue.length', () => queue.length); // 앱 고유 값 등록
 glasspod.state('app.mode', 'ready');                    // 상태 등록, 바뀌면 state 이벤트 전송
+glasspod.stop();                                        // 연결을 닫음. 이벤트 루프가 비기를 기다려 끝나는 앱은 종료 처리에서 부름(5.1)
 ```
 
 ## 9. 보안
