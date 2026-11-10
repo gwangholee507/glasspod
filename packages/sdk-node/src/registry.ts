@@ -5,7 +5,16 @@ import type { MetricValue } from "@glasspod/protocol";
 import { debug, describeError, warn } from "./log.js";
 
 // 스키마의 지표 이름 규칙(소문자·숫자·_, 두 단계 이상)에 app. 접두어를 더한 것입니다.
-const APP_METRIC_NAME = /^app(\.[a-z][a-z0-9_]*)+$/;
+// 개발자가 정하는 이벤트 이름과 상태 이름(T06)도 같은 규칙을 씁니다.
+const APP_NAME = /^app(\.[a-z][a-z0-9_]*)+$/;
+
+export function isAppName(name: unknown): name is string {
+  return typeof name === "string" && APP_NAME.test(name);
+}
+
+// app.* 규칙을 어긴 이름에 붙이는 설명입니다.
+export const APP_NAME_RULE =
+  'must start with "app." and use lowercase letters, digits and _ in each level';
 // 등록할 수 있는 app.* 지표 수입니다. 요청마다 이름을 만드는 실수가 메모리와 메시지 크기를 늘리지 않게 합니다.
 export const MAX_APP_METRICS = 100;
 
@@ -138,10 +147,8 @@ export class Registry {
 
   // 새 이름을 넣을 수 있는지 봅니다. 안 되면 이유를 경고로 남깁니다.
   private canAdd(name: string, existing: Entry | undefined): boolean {
-    if (typeof name !== "string" || !APP_METRIC_NAME.test(name)) {
-      warn(
-        `metric ignored: ${quote(name)} must start with "app." and use lowercase letters, digits and _ in each level`,
-      );
+    if (!isAppName(name)) {
+      warn(`metric ignored: ${quote(name)} ${APP_NAME_RULE}`);
       return false;
     }
     if (existing !== undefined) {
@@ -176,7 +183,7 @@ function warnOnce(entry: Entry, message: string): void {
 }
 
 // 로그에 쓸 이름입니다. 문자열이 아니면 종류만 적습니다.
-function quote(name: unknown): string {
+export function quote(name: unknown): string {
   return typeof name === "string" ? JSON.stringify(name) : typeof name;
 }
 

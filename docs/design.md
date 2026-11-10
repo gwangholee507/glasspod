@@ -62,6 +62,7 @@ Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 �
 | 서버 설정과 로그 | 설정은 환경변수(`GLASSPOD_PORT` 등)로 받고 없으면 기본값을 씀. 로그는 한 줄 텍스트(`console`). 연결 규칙은 `docs/guides/T03.md` | 확정 (2026-11-08) |
 | SDK 연결 (Node) | Node 내장 `WebSocket`을 씀(의존성 추가 없음). 설정 값이 없거나 잘못되면 SDK를 끄고 경고 한 줄. 로그는 중요한 것만 표준 오류에 한 줄, 자세한 것은 `NODE_DEBUG=glasspod`. 앱 이름·버전은 `start()` 옵션. 연결 규칙은 `docs/guides/T04.md` | 확정 (2026-11-09) |
 | SDK metrics (Node) | `runtime.*` 11개를 스스로 모음(이벤트 루프 지연·사용률, 힙·RSS·컨테이너 메모리 한도, CPU). 개발자 등록은 gauge 콜백 `gauge(name, fn)`과 counter 객체 `counter(name).inc(n)`, 이름은 `app.*`만, 100개까지. 연결된 동안 welcome의 주기(1초 이상)로 보냄. 자세한 내용은 `docs/guides/T05.md` | 확정 (2026-11-09) |
+| SDK event (Node) | 공개 API는 `exception(error, data?)`, `state(name, value)`, `event(name, options?)`. 같은 이벤트는 첫 건을 바로 보내고 그 뒤 10초씩 묶어 `count`로 보냄. 처리되지 않은 예외는 `uncaughtExceptionMonitor`에서 바로 보내고 기다리지 않음. 자세한 내용은 `docs/guides/T06.md` | 확정 (2026-11-10) |
 | 웹 화면 | React + Vite | 확정 (2026-11-05) |
 | 저장소 구성 | npm workspaces 모노레포, ESM만 사용. 패키지 이름은 `@glasspod/protocol`, `@glasspod/sdk`, `@glasspod/server`, `@glasspod/web`, `@glasspod/demo-app`. 자세한 내용은 `docs/guides/T01.md` | 확정 (2026-11-05) |
 | 1차 범위 | 2장의 핵심 기능. 자동 규칙은 확장 기능 | 확정 (2026-11-05) |
@@ -102,7 +103,8 @@ SDK가 앱을 망치면 안 됩니다. 다음을 지킵니다.
 - 서버가 없거나 연결이 끊겨도 앱은 정상 동작합니다. SDK 내부 오류를 앱으로 던지지 않습니다.
 - 수집과 전송은 가볍게 합니다. Node.js에서는 SDK도 앱과 같은 이벤트 루프를 쓰므로 힙 스냅샷 같은 무거운 작업은 하지 않습니다.
 - 메모리 사용에 상한을 둡니다. 보내지 못한 데이터는 정해진 양만 들고 있습니다.
-- 앱의 종료 동작을 바꾸지 않습니다. 처리되지 않은 예외를 잡으면 서버로 보낸 뒤(최대 1초 대기) 원래대로 종료하고, 종료 시그널(SIGTERM) 처리는 가로채지 않습니다.
+- 앱의 종료 동작을 바꾸지 않습니다. 처리되지 않은 예외는 서버로 보낸 뒤 원래대로 종료하고, 종료 시그널(SIGTERM) 처리는 가로채지 않습니다.
+  - Node SDK(2026-11-10): `process`의 `uncaughtExceptionMonitor`에서 보내고 기다리지 않습니다. 오류 출력, 종료 코드, 종료 시점이 SDK가 없을 때와 같습니다. 메시지가 운영체제의 소켓 버퍼에 들어가면 프로세스가 끝나도 운영체제가 마저 보냅니다(같은 컴퓨터에서 100KB까지 확인, `docs/guides/T06.md`). 처음 초안의 '최대 1초 대기'는 기다리는 동안 앱 코드가 계속 돌고 오류 출력의 위치가 바뀌어 쓰지 않습니다.
   - 예외(2026-11-09): Node SDK는 Node 내장 `WebSocket`을 쓰는데, 열린 연결을 `unref()`할 방법이 없어 연결된 동안에는 이벤트 루프가 비지 않습니다. 이벤트 루프가 비기를 기다려 끝나는 앱은 종료 처리에서 `glasspod.stop()`을 부릅니다. SIGTERM을 처리하지 않는 앱과 `process.exit()`를 부르는 앱은 영향이 없습니다. SDK의 타이머는 모두 `unref()`하므로 연결이 끊긴 동안에는 앱 종료를 막지 않습니다.
 
 ### 5.2 서버
@@ -176,7 +178,7 @@ SDK (앱 안)                         서버
 - 메시지는 JSON이고, WebSocket 텍스트 프레임 하나에 메시지 하나를 담습니다.
 - SDK가 보내는 모든 메시지에는 `type`, `seq`, `ts`를 붙입니다.
   - `seq`: 프로세스가 시작될 때 0부터 셉니다. 재연결해도 이어서 늘어나므로 서버가 중복과 누락을 판단할 수 있습니다.
-  - `ts`: 보낸 시각(epoch ms)입니다. 서버는 받은 시각을 따로 기록합니다.
+  - `ts`: 보낸 시각(epoch ms)입니다. 서버는 받은 시각을 따로 기록합니다. event만은 일어난 시각입니다(7.3, 7.4).
 - 서버가 보내는 메시지에는 `type`만 필수입니다.
 - 프로토콜 버전은 `hello`에서 한 번만 알립니다.
 - 메시지 형식은 JSON Schema(draft-07)로 정의합니다. 기준 파일은 `packages/protocol/schema/`에 있습니다(SDK → 서버, 서버 → SDK, snapshot 응답). 필수 필드와 값의 범위는 이 파일을 따르고, 요약은 `docs/guides/T02.md`의 '필드 규칙'에 있습니다. Node SDK와 서버는 여기서 타입을 만들어 쓰고, 다른 언어의 SDK도 같은 스키마를 따릅니다.
@@ -260,8 +262,14 @@ SDK (앱 안)                         서버
   - `exception`: 처리되지 않은 예외, 또는 SDK로 보고한 예외
   - `state`: 개발자가 등록한 상태의 전환 (예: `ready` → `draining`)
   - 그 밖에 개발자가 정의한 이벤트
-- 같은 예외가 쏟아지면 SDK가 묶어서 `count`로 보냅니다. 예를 들어 10초 동안 같은 예외가 120번 나면 한 건으로 보내고 `count`를 120으로 둡니다. 한도는 `welcome`의 `maxEventsPerMinute`를 따릅니다.
-- 처리되지 않은 예외는 서버로 먼저 보내고 프로세스가 종료되므로, 컨테이너가 교체돼도 직전 예외가 서버에 남습니다. OOMKilled는 보낼 틈이 없지만 그 직전 metrics에 힙이 늘어나는 모습이 남습니다.
+- 개발자가 정의하는 이벤트 이름은 metrics와 같이 `app.`으로 시작합니다(2026-11-10). `exception`, `state`와 앞으로 SDK가 쓸 이름과 겹치지 않게 하려는 것입니다.
+- event의 `ts`는 보낸 시각이 아니라 일어난 시각입니다. 묶어 보낸 event는 그 묶음에서 처음 일어난 것의 시각입니다(7.4 '원래 ts 그대로'와 같음).
+- 같은 이벤트가 쏟아지면 SDK가 묶어서 `count`로 보냅니다. 첫 건은 바로 보내고, 그 뒤 10초 동안 같은 것은 세기만 했다가 10초가 끝날 때 센 횟수를 `count`로 한 건 보냅니다. 계속 쏟아지면 10초마다 한 건입니다. 같은 이벤트는 `name`, `level`, `message`, `data.errorType`이 모두 같은 것입니다(2026-11-10).
+- 한도는 `welcome`의 `maxEventsPerMinute`를 따릅니다. 최근 60초 동안 보낸 수가 한도에 닿으면 세어 두었다가 한도가 풀린 뒤 묶어 보냅니다. `0`이면 보내지 않습니다.
+- 예외 event의 `data`에는 `errorType`과 `stack`이 들어갑니다. 처리되지 않은 예외는 `origin`(`uncaughtException` 또는 `unhandledRejection`)을 더하고, 그 예외로 프로세스가 끝나면 `fatal: true`를 더합니다(2026-11-10).
+- 상태 전환 event는 `message`가 `app.mode: ready -> draining`, `data`가 `{ "name": "app.mode", "from": "ready", "to": "draining" }`입니다. 처음 정할 때도 보내며 그때는 `from`이 없습니다.
+- 처리되지 않은 예외는 서버로 먼저 보내고 프로세스가 종료되므로, 컨테이너가 교체돼도 직전 예외가 서버에 남습니다. 이 event는 묶기와 한도를 거치지 않고 바로 보내며, 세고 있던 같은 예외의 횟수를 `count`에 더하고 세고 있던 다른 event도 함께 보냅니다. OOMKilled는 보낼 틈이 없지만 그 직전 metrics에 힙이 늘어나는 모습이 남습니다.
+- Node SDK의 공개 API, 길이 상한, 사용 실수 처리는 `docs/guides/T06.md`에 있습니다.
 
 #### request / response (서버 → SDK → 서버)
 
@@ -322,7 +330,7 @@ env:
 
 세 값 가운데 하나라도 없거나 `GLASSPOD_SERVER`가 `ws://`·`wss://` 주소가 아니면 SDK는 경고 한 줄을 남기고 꺼지며, 앱은 그대로 동작합니다.
 
-앱 코드에서 SDK를 쓰는 모습입니다. `start()`와 `stop()`은 T04, `gauge()`와 `counter()`는 T05에서 만들었고, 나머지 API는 가칭입니다.
+앱 코드에서 SDK를 쓰는 모습입니다. `start()`와 `stop()`은 T04, `gauge()`와 `counter()`는 T05, `exception()`, `state()`, `event()`는 T06에서 만들었고, `express()`는 가칭입니다.
 
 ```js
 import { glasspod } from '@glasspod/sdk';
@@ -332,6 +340,8 @@ app.use(glasspod.express());                            // HTTP 요청 자동 �
 glasspod.gauge('app.queue.length', () => queue.length); // 앱 고유 값 등록. 보낼 때마다 콜백을 부름
 glasspod.counter('app.orders.created').inc();           // 누적값 등록. 같은 이름이면 같은 counter
 glasspod.state('app.mode', 'ready');                    // 상태 등록, 바뀌면 state 이벤트 전송
+glasspod.exception(err, { route: 'GET /orders' });      // 앱이 잡은 예외 보고. errorType과 stack은 SDK가 채움
+glasspod.event('app.cache.cleared', { level: 'warn' }); // 개발자가 정의한 이벤트. 이름은 app.*
 glasspod.stop();                                        // 연결을 닫음. 이벤트 루프가 비기를 기다려 끝나는 앱은 종료 처리에서 부름(5.1)
 ```
 

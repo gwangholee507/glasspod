@@ -19,3 +19,24 @@ export function debug(message: string): void {
 export function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+// 같은 문제는 처음 한 번만 경고하고, 그 뒤로는 디버그 로그로 남깁니다.
+// 기억하는 문제 수에 상한을 두어, 이름을 매번 새로 만드는 실수가 메모리를 늘리지 않게 합니다.
+export class WarnOnce {
+  private readonly seen = new Set<string>();
+  private readonly max: number;
+
+  constructor(max = 200) {
+    this.max = max;
+  }
+
+  // key는 문제를 구분하는 값입니다(예: 이름과 문제 종류).
+  warn(key: string, message: string): void {
+    if (this.seen.has(key) || this.seen.size >= this.max) {
+      debug(message);
+      return;
+    }
+    this.seen.add(key);
+    warn(message);
+  }
+}
