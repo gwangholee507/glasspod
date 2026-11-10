@@ -61,6 +61,7 @@ Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 �
 | 서버 | Node.js + TypeScript, Express + `ws` | 확정 (2026-11-05) |
 | 서버 설정과 로그 | 설정은 환경변수(`GLASSPOD_PORT` 등)로 받고 없으면 기본값을 씀. 로그는 한 줄 텍스트(`console`). 연결 규칙은 `docs/guides/T03.md` | 확정 (2026-11-08) |
 | SDK 연결 (Node) | Node 내장 `WebSocket`을 씀(의존성 추가 없음). 설정 값이 없거나 잘못되면 SDK를 끄고 경고 한 줄. 로그는 중요한 것만 표준 오류에 한 줄, 자세한 것은 `NODE_DEBUG=glasspod`. 앱 이름·버전은 `start()` 옵션. 연결 규칙은 `docs/guides/T04.md` | 확정 (2026-11-09) |
+| SDK metrics (Node) | `runtime.*` 11개를 스스로 모음(이벤트 루프 지연·사용률, 힙·RSS·컨테이너 메모리 한도, CPU). 개발자 등록은 gauge 콜백 `gauge(name, fn)`과 counter 객체 `counter(name).inc(n)`, 이름은 `app.*`만, 100개까지. 연결된 동안 welcome의 주기(1초 이상)로 보냄. 자세한 내용은 `docs/guides/T05.md` | 확정 (2026-11-09) |
 | 웹 화면 | React + Vite | 확정 (2026-11-05) |
 | 저장소 구성 | npm workspaces 모노레포, ESM만 사용. 패키지 이름은 `@glasspod/protocol`, `@glasspod/sdk`, `@glasspod/server`, `@glasspod/web`, `@glasspod/demo-app`. 자세한 내용은 `docs/guides/T01.md` | 확정 (2026-11-05) |
 | 1차 범위 | 2장의 핵심 기능. 자동 규칙은 확장 기능 | 확정 (2026-11-05) |
@@ -91,7 +92,7 @@ Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 �
 
 수집하는 것:
 
-- **자동 수집** (`runtime.*`, `http.*`): 이벤트 루프 지연, 힙 사용량, HTTP 요청 수·응답 시간·에러
+- **자동 수집** (`runtime.*`, `http.*`): 이벤트 루프 지연·사용률, 힙·프로세스 메모리와 컨테이너 메모리 한도, CPU 시간, HTTP 요청 수·응답 시간·에러
 - **개발자 등록** (`app.*`): 큐 길이, 커넥션 수 같은 앱 고유 값과 앱 내부 상태(예: `ready`, `draining`)
 - **사건**: 예외, 상태 전환, 개발자가 정의한 이벤트
 - **자기 위치**: Pod 이름과 namespace (Downward API로 받은 환경변수)
@@ -237,7 +238,9 @@ SDK (앱 안)                         서버
 - 이름 접두어로 출처를 구분합니다. `runtime.*`과 `http.*`은 SDK 자동 수집, `app.*`은 개발자 등록입니다. 이름은 소문자, 숫자, `_`로 쓰고(각 단계의 첫 글자는 소문자), 단계는 `.`으로 두 단계 이상 나누고, 단위가 있으면 끝에 붙입니다(`_ms`, `_bytes`).
 - `kind`는 `gauge`(지금 값)와 `counter`(누적값) 두 가지입니다.
 - counter는 누적값으로 보냅니다. 메시지 하나를 잃어도 다음 값으로 메워집니다. 값이 줄어들면 서버는 프로세스가 재시작됐다고 판단합니다.
-- 보낼 값이 없어도 주기마다 빈 묶음을 보냅니다. 이것이 heartbeat입니다.
+- 보낼 값이 없어도 주기마다 빈 묶음을 보냅니다. 이것이 heartbeat입니다. Node SDK는 `runtime.*` 값이 늘 있으므로 빈 묶음이 나오지 않습니다.
+- SDK는 `welcome`을 받은 때부터 한 주기마다 보내고, 연결이 끝나면 멈춥니다. 주기가 1000ms보다 짧으면 1000ms로 보냅니다(2026-11-09). 서버가 이보다 짧은 주기를 정하면 '3주기째 없음'(7.5)을 셀 때 이 하한을 함께 봅니다.
+- Node SDK가 모으는 `runtime.*` 목록과 이벤트 루프 지연을 재는 방법은 `docs/guides/T05.md` 'runtime 지표'에 있습니다. 개발자가 등록하는 이름은 `app.`으로 시작해야 합니다.
 - 응답 시간은 v1에서 SDK가 주기마다 p50과 p99를 계산해 gauge로 보냅니다.
 
 #### event (SDK → 서버, 일어나자마자)
@@ -319,14 +322,15 @@ env:
 
 세 값 가운데 하나라도 없거나 `GLASSPOD_SERVER`가 `ws://`·`wss://` 주소가 아니면 SDK는 경고 한 줄을 남기고 꺼지며, 앱은 그대로 동작합니다.
 
-앱 코드에서 SDK를 쓰는 모습입니다. `start()`와 `stop()`은 T04에서 만들었고, 나머지 API는 가칭입니다.
+앱 코드에서 SDK를 쓰는 모습입니다. `start()`와 `stop()`은 T04, `gauge()`와 `counter()`는 T05에서 만들었고, 나머지 API는 가칭입니다.
 
 ```js
 import { glasspod } from '@glasspod/sdk';
 
 glasspod.start({ app: { name: 'orders', version: '1.4.2' } }); // 환경변수에서 서버 주소와 Pod 정보를 읽음. app은 선택
 app.use(glasspod.express());                            // HTTP 요청 자동 수집
-glasspod.gauge('app.queue.length', () => queue.length); // 앱 고유 값 등록
+glasspod.gauge('app.queue.length', () => queue.length); // 앱 고유 값 등록. 보낼 때마다 콜백을 부름
+glasspod.counter('app.orders.created').inc();           // 누적값 등록. 같은 이름이면 같은 counter
 glasspod.state('app.mode', 'ready');                    // 상태 등록, 바뀌면 state 이벤트 전송
 glasspod.stop();                                        // 연결을 닫음. 이벤트 루프가 비기를 기다려 끝나는 앱은 종료 처리에서 부름(5.1)
 ```

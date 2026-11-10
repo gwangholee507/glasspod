@@ -1,9 +1,15 @@
 // Glasspod Node.js SDK입니다. 앱 안에서 Glasspod 서버에 WebSocket으로 붙습니다(design.md 5.1, 8장).
-// metrics(T05)와 event(T06)는 이 연결 위에 더합니다.
+// 연결된 동안 주기마다 metrics를 보냅니다(T05). event(T06)는 이 연결 위에 더합니다.
 import { randomUUID } from "node:crypto";
 import { readConfig } from "./config.js";
 import { Connection } from "./connection.js";
 import { debug, describeError, warn } from "./log.js";
+import { MetricsReporter } from "./metrics.js";
+import { Registry } from "./registry.js";
+import type { Counter } from "./registry.js";
+import { RuntimeSampler } from "./runtime.js";
+
+export type { Counter };
 
 export interface StartOptions {
   // 감시 대상 앱의 이름과 버전입니다. hello의 app으로 보내고, 주지 않으면 보내지 않습니다.
@@ -12,6 +18,8 @@ export interface StartOptions {
 
 // SDK 상태는 프로세스에 하나입니다.
 let connection: Connection | undefined;
+// 개발자가 등록한 app.* 지표입니다. start() 전에도, SDK가 꺼져 있어도 등록할 수 있습니다.
+const registry = new Registry();
 // 프로세스에서 처음 start()할 때 만들고, stop() 뒤 다시 시작해도 그대로 씁니다(design.md 7.3).
 let instanceId: string | undefined;
 // SDK가 보내는 모든 메시지의 seq입니다. 0부터 하나씩 늘고 재연결해도 이어집니다(design.md 7.2).
@@ -40,13 +48,28 @@ function start(options: StartOptions = {}): void {
     }
     instanceId ??= randomUUID();
     const app = checkApp(options.app);
-    connection = new Connection({
+    // welcome을 받으면 metrics를 보내기 시작하고, 연결이 끝나면 멈춥니다.
+    const reporter = new MetricsReporter(
+      new RuntimeSampler(),
+      registry,
+      (values) =>
+        current.send((seq) => ({
+          type: "metrics",
+          seq,
+          ts: Date.now(),
+          values,
+        })),
+    );
+    const current = new Connection({
       ...result.config,
       instanceId,
       nextSeq,
       ...(app === undefined ? {} : { app }),
+      onConnected: (settings) => reporter.begin(settings.metricsIntervalMs),
+      onDisconnected: () => reporter.end(),
     });
-    connection.start();
+    connection = current;
+    current.start();
   } catch (error) {
     debug(`start failed: ${describeError(error)}`);
   }
@@ -79,4 +102,16 @@ function checkApp(app: StartOptions["app"]): StartOptions["app"] {
   return version === undefined ? { name } : { name, version };
 }
 
-export const glasspod = { start, stop };
+// 지금 값을 보내는 app.* 지표를 등록합니다. 보낼 때마다 read를 부르므로 가볍고 동기로 끝나는 콜백을 씁니다.
+// 같은 이름을 다시 등록하면 새 콜백으로 바꿉니다. 이름이 잘못됐으면 경고만 남기고 등록하지 않습니다.
+function gauge(name: string, read: () => number): void {
+  registry.gauge(name, read);
+}
+
+// 누적값을 보내는 app.* 지표를 만듭니다. 같은 이름이면 같은 counter를 돌려줍니다.
+// 이름이 잘못됐으면 경고만 남기고, 아무 일도 하지 않는 counter를 돌려줍니다.
+function counter(name: string): Counter {
+  return registry.counter(name);
+}
+
+export const glasspod = { start, stop, gauge, counter };

@@ -2,8 +2,14 @@
 // 연결 → hello → welcome을 거쳐 연결된 상태가 되고, 끊기면 재연결 간격대로 다시 붙습니다.
 // Node 내장 WebSocket(undici)을 씁니다. 동작상의 제약은 docs/guides/T04.md '내장 WebSocket의 제약'에 있습니다.
 import { PROTOCOL_VERSION, parseServerMessage } from "@glasspod/protocol";
-import type { HelloMessage, PodRef, WelcomeMessage } from "@glasspod/protocol";
+import type {
+  HelloMessage,
+  PodRef,
+  SdkMessage,
+  WelcomeMessage,
+} from "@glasspod/protocol";
 import { reconnectDelay } from "./backoff.js";
+import { guard } from "./guard.js";
 import { debug, describeError, warn } from "./log.js";
 import { SDK_VERSION } from "./version.js";
 
@@ -20,6 +26,9 @@ export interface ConnectionOptions {
   app?: HelloMessage["app"];
   // 프로세스에 하나뿐인 seq 카운터입니다. 재연결하거나 다시 시작해도 이어집니다(design.md 7.2).
   nextSeq: () => number;
+  // welcome을 받아 연결된 때와, 그 연결이 끝난 때(끊김, stop) 부릅니다. metrics(T05)가 씁니다.
+  onConnected?: (settings: ServerSettings) => void;
+  onDisconnected?: () => void;
 }
 
 // welcome으로 받은 주기와 한도입니다. metrics(T05)와 event(T06)가 씁니다.
@@ -57,6 +66,18 @@ export class Connection {
     return this.welcome;
   }
 
+  // 연결된(welcome을 받은) 동안에만 보냅니다. build는 이번 메시지의 seq를 받아 메시지를 만듭니다.
+  // 보냈으면 그 seq, 연결이 없으면 undefined입니다. 보내지 않으면 seq도 쓰지 않습니다.
+  send(build: (seq: number) => SdkMessage): number | undefined {
+    const socket = this.socket;
+    if (socket === undefined || this.welcome === undefined) {
+      return undefined;
+    }
+    const message = build(this.options.nextSeq());
+    socket.send(JSON.stringify(message));
+    return message.seq;
+  }
+
   start(): void {
     if (this.running) {
       return;
@@ -72,11 +93,15 @@ export class Connection {
     this.running = false;
     this.clearTimer();
     const socket = this.socket;
+    const wasConnected = this.welcome !== undefined;
     this.socket = undefined;
     this.welcome = undefined;
     this.rejected = false;
     if (socket !== undefined) {
       closeQuietly(socket, CLOSE_NORMAL);
+    }
+    if (wasConnected) {
+      this.notify(this.options.onDisconnected);
     }
     debug("stopped");
   }
@@ -167,10 +192,11 @@ export class Connection {
 
   private onWelcome(message: WelcomeMessage): void {
     this.clearTimer();
-    this.welcome = {
+    const settings: ServerSettings = {
       metricsIntervalMs: message.metricsIntervalMs,
       maxEventsPerMinute: message.maxEventsPerMinute,
     };
+    this.welcome = settings;
     this.failures = 0;
     debug(
       `welcome metricsIntervalMs=${message.metricsIntervalMs} maxEventsPerMinute=${message.maxEventsPerMinute}`,
@@ -181,6 +207,10 @@ export class Connection {
     }
     this.outageReported = false;
     this.reportedRejects.clear();
+    const { onConnected } = this.options;
+    if (onConnected !== undefined) {
+      this.notify(() => onConnected(settings));
+    }
   }
 
   private onReject(reason: string): void {
@@ -222,6 +252,9 @@ export class Connection {
     if (socket !== undefined) {
       closeQuietly(socket);
     }
+    if (wasConnected) {
+      this.notify(this.options.onDisconnected);
+    }
     if (!this.running) {
       return;
     }
@@ -243,6 +276,13 @@ export class Connection {
         : "connect failed";
     debug(`${what} (${detail}); retry ${this.failures} in ${delay}ms`);
     this.setTimer(delay, () => this.connect());
+  }
+
+  // 연결됨·끊김 알림을 부릅니다. 받는 쪽에서 난 예외가 연결 처리를 멈추지 않게 따로 감쌉니다.
+  private notify(callback: (() => void) | undefined): void {
+    if (callback !== undefined) {
+      guard(callback);
+    }
   }
 
   private setTimer(ms: number, callback: () => void): void {
@@ -275,14 +315,5 @@ function closeQuietly(socket: WebSocket, code?: number): void {
     }
   } catch (error) {
     debug(`close failed: ${describeError(error)}`);
-  }
-}
-
-// SDK 내부 오류가 앱으로 나가지 않게 막습니다(SDK 원칙). 리스너와 타이머에서 난 예외는 처리되지 않은 예외가 됩니다.
-function guard(callback: () => void): void {
-  try {
-    callback();
-  } catch (error) {
-    debug(`internal error: ${describeError(error)}`);
   }
 }

@@ -80,8 +80,9 @@ glasspod.state('app.mode', 'ready');                    // 상태 등록, 바뀌
 - SDK–서버 프로토콜 v1(JSON Schema, 스키마에서 만든 타입, 메시지 검증)
 - 서버 뼈대: `/health`, SDK용 WebSocket `/agent`. `hello`를 받아 `welcome`이나 `reject`로 답함
 - Node.js SDK 연결: 환경변수에서 서버 주소와 Pod 정보를 읽어 `hello`를 보내고, 끊기면 1초부터 30초까지 늘려 가며 다시 붙음
+- Node.js SDK metrics: 이벤트 루프 지연·사용률, 메모리, CPU를 스스로 모으고, 앱이 등록한 gauge·counter와 함께 주기마다 보냄
 
-SDK는 아직 metrics와 event를 보내지 않고, 웹 화면은 비어 있으며, 서버는 받은 데이터를 아직 보관하지 않습니다.
+SDK는 아직 event를 보내지 않고, 웹 화면은 비어 있으며, 서버는 받은 데이터를 아직 보관하지 않습니다.
 
 첫 마일스톤은 [대표 시나리오](docs/design.md#6-대표-시나리오-pod-하나가-느려질-때)를 로컬 클러스터에서 처음부터 끝까지 돌려 보는 것입니다. 느려진 Pod 하나를 화면에서 찾고, 트래픽에서 뺀 채로 원인을 확인한 뒤 삭제합니다.
 
