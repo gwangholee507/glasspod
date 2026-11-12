@@ -1,7 +1,9 @@
 // metrics 주기 전송입니다(design.md 7.3). welcome을 받으면 시작하고, 연결이 끝나면 멈춥니다.
 // 보낼 값이 없어도 주기마다 보내며, 이것이 heartbeat입니다. 끊긴 동안의 값 유지는 T08에서 합니다.
+// 값은 runtime.*, http.*(T07), app.* 순서로 보냅니다.
 import type { MetricValue } from "@glasspod/protocol";
 import { guard } from "./guard.js";
+import type { HttpCollector } from "./http.js";
 import { debug } from "./log.js";
 import type { Registry } from "./registry.js";
 import type { RuntimeSampler } from "./runtime.js";
@@ -21,12 +23,19 @@ export type SendMetrics = (values: MetricValue[]) => number | undefined;
 
 export class MetricsReporter {
   private readonly runtime: RuntimeSampler;
+  private readonly http: HttpCollector;
   private readonly registry: Registry;
   private readonly send: SendMetrics;
   private timer: ReturnType<typeof setInterval> | undefined;
 
-  constructor(runtime: RuntimeSampler, registry: Registry, send: SendMetrics) {
+  constructor(
+    runtime: RuntimeSampler,
+    http: HttpCollector,
+    registry: Registry,
+    send: SendMetrics,
+  ) {
     this.runtime = runtime;
+    this.http = http;
     this.registry = registry;
     this.send = send;
   }
@@ -41,6 +50,8 @@ export class MetricsReporter {
       );
     }
     this.runtime.start();
+    // 끊긴 동안 끝난 요청의 응답 시간은 버리고, 첫 묶음이 한 주기만 덮게 합니다.
+    this.http.resetDurations();
     const timer = setInterval(() => guard(() => this.tick()), intervalMs);
     // SDK 타이머가 앱 종료를 막지 않게 합니다.
     timer.unref();
@@ -60,7 +71,11 @@ export class MetricsReporter {
   }
 
   private tick(): void {
-    const values = [...this.runtime.collect(), ...this.registry.collect()];
+    const values = [
+      ...this.runtime.collect(),
+      ...this.http.collect(),
+      ...this.registry.collect(),
+    ];
     const seq = this.send(values);
     if (seq !== undefined) {
       debug(`metrics sent seq=${seq} values=${values.length}`);

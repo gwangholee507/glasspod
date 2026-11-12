@@ -1,5 +1,6 @@
 import type { MetricValue } from "@glasspod/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { HttpCollector } from "./http.js";
 import {
   MAX_TIMER_MS,
   MIN_METRICS_INTERVAL_MS,
@@ -23,7 +24,7 @@ describe("MetricsReporter", () => {
     vi.useRealTimers();
   });
 
-  it("sends runtime and app values every interval until end()", () => {
+  it("sends runtime, http and app values every interval until end()", () => {
     vi.useFakeTimers();
     const runtime = {
       start: vi.fn(),
@@ -35,9 +36,19 @@ describe("MetricsReporter", () => {
     const registry = new Registry();
     let queue = 0;
     registry.gauge("app.queue.length", () => queue++);
+    // express()를 부른 앱처럼 미들웨어를 만들어 둡니다. 요청이 없으므로 counter와 in_flight만 나갑니다.
+    const http = new HttpCollector();
+    http.middleware();
+    const httpValues: MetricValue[] = [
+      { name: "http.requests.total", kind: "counter", value: 0 },
+      { name: "http.requests.errors_total", kind: "counter", value: 0 },
+      { name: "http.requests.aborted_total", kind: "counter", value: 0 },
+      { name: "http.requests.in_flight", kind: "gauge", value: 0 },
+    ];
     const sent: MetricValue[][] = [];
     const reporter = new MetricsReporter(
       runtime as unknown as RuntimeSampler,
+      http,
       registry,
       (values) => sent.push(values),
     );
@@ -52,14 +63,17 @@ describe("MetricsReporter", () => {
     expect(sent).toEqual([
       [
         { name: "runtime.heap.used_bytes", kind: "gauge", value: 100 },
+        ...httpValues,
         { name: "app.queue.length", kind: "gauge", value: 0 },
       ],
       [
         { name: "runtime.heap.used_bytes", kind: "gauge", value: 100 },
+        ...httpValues,
         { name: "app.queue.length", kind: "gauge", value: 1 },
       ],
       [
         { name: "runtime.heap.used_bytes", kind: "gauge", value: 100 },
+        ...httpValues,
         { name: "app.queue.length", kind: "gauge", value: 2 },
       ],
     ]);

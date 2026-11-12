@@ -1,11 +1,14 @@
 // Glasspod Node.js SDK입니다. 앱 안에서 Glasspod 서버에 WebSocket으로 붙습니다(design.md 5.1, 8장).
 // 연결된 동안 주기마다 metrics를 보내고(T05), 일이 생기자마자 event를 보냅니다(T06).
+// Express 미들웨어로 HTTP 요청을 세고, Express가 잡은 예외를 보냅니다(T07).
 import { randomUUID } from "node:crypto";
 import { readConfig } from "./config.js";
 import { Connection } from "./connection.js";
 import { watchCrashes } from "./crash.js";
 import type { OnCrash } from "./crash.js";
 import { EventAggregator } from "./events.js";
+import { HttpCollector } from "./http.js";
+import type { HttpErrorMiddleware, HttpMiddleware } from "./http.js";
 import { debug, describeError, warn, WarnOnce } from "./log.js";
 import { MetricsReporter } from "./metrics.js";
 import { Registry } from "./registry.js";
@@ -15,7 +18,7 @@ import type { EventOptions } from "./reports.js";
 import { RuntimeSampler } from "./runtime.js";
 import { StateStore } from "./states.js";
 
-export type { Counter, EventOptions };
+export type { Counter, EventOptions, HttpErrorMiddleware, HttpMiddleware };
 
 export interface StartOptions {
   // 감시 대상 앱의 이름과 버전입니다. hello의 app으로 보내고, 주지 않으면 보내지 않습니다.
@@ -41,6 +44,8 @@ const events = new EventAggregator(
     connection?.send((seq) => ({ type: "event", seq, ts, count, ...content })),
   () => connection?.settings?.maxEventsPerMinute,
 );
+// HTTP 요청 집계입니다. start() 전에도, SDK가 꺼져 있어도 미들웨어를 만들고 셀 수 있습니다.
+const http = new HttpCollector();
 // 처리되지 않은 예외 감시를 끄는 함수입니다. start()가 연결을 만들 때 켭니다.
 let unwatchCrashes: (() => void) | undefined;
 
@@ -69,6 +74,7 @@ function start(options: StartOptions = {}): void {
     // welcome을 받으면 metrics를 보내기 시작하고, 연결이 끝나면 멈춥니다.
     const reporter = new MetricsReporter(
       new RuntimeSampler(),
+      http,
       registry,
       (values) =>
         current.send((seq) => ({
@@ -186,6 +192,38 @@ function event(name: string, options?: EventOptions): void {
   }
 }
 
+// HTTP 요청을 세는 Express 미들웨어입니다. 세지 않을 라우트(probe 등) 뒤, 다른 라우트 앞에 둡니다.
+// 요청 수, 오류(5xx), 끊긴 요청, 응답 시간 p50·p99·max, 처리 중인 요청 수를 metrics로 보냅니다.
+function express(): HttpMiddleware {
+  try {
+    return http.middleware();
+  } catch (error) {
+    debug(`express failed: ${describeError(error)}`);
+    return (_req, _res, next) => next();
+  }
+}
+
+// Express가 잡은 예외를 route와 함께 exception event로 보내는 오류 미들웨어입니다.
+// 라우트 뒤, 앱의 오류 처리기 앞에 둡니다. 보낸 뒤 next(err)로 넘기므로 앱의 오류 처리는 그대로입니다.
+// status가 400~499인 오류(404, 잘못된 JSON 본문 등)는 보내지 않습니다.
+function expressErrors(): HttpErrorMiddleware {
+  try {
+    return http.errorMiddleware((error, route) =>
+      events.record(
+        exceptionContent(
+          error,
+          undefined,
+          route === undefined ? undefined : { route },
+          warnings,
+        ),
+      ),
+    );
+  } catch (error) {
+    debug(`expressErrors failed: ${describeError(error)}`);
+    return (caught, _req, _res, next) => next(caught);
+  }
+}
+
 export const glasspod = {
   start,
   stop,
@@ -194,4 +232,6 @@ export const glasspod = {
   exception,
   state,
   event,
+  express,
+  expressErrors,
 };

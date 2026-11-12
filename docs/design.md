@@ -63,6 +63,7 @@ Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 �
 | SDK 연결 (Node) | Node 내장 `WebSocket`을 씀(의존성 추가 없음). 설정 값이 없거나 잘못되면 SDK를 끄고 경고 한 줄. 로그는 중요한 것만 표준 오류에 한 줄, 자세한 것은 `NODE_DEBUG=glasspod`. 앱 이름·버전은 `start()` 옵션. 연결 규칙은 `docs/guides/T04.md` | 확정 (2026-11-09) |
 | SDK metrics (Node) | `runtime.*` 11개를 스스로 모음(이벤트 루프 지연·사용률, 힙·RSS·컨테이너 메모리 한도, CPU). 개발자 등록은 gauge 콜백 `gauge(name, fn)`과 counter 객체 `counter(name).inc(n)`, 이름은 `app.*`만, 100개까지. 연결된 동안 welcome의 주기(1초 이상)로 보냄. 자세한 내용은 `docs/guides/T05.md` | 확정 (2026-11-09) |
 | SDK event (Node) | 공개 API는 `exception(error, data?)`, `state(name, value)`, `event(name, options?)`. 같은 이벤트는 첫 건을 바로 보내고 그 뒤 10초씩 묶어 `count`로 보냄. 처리되지 않은 예외는 `uncaughtExceptionMonitor`에서 바로 보내고 기다리지 않음. 자세한 내용은 `docs/guides/T06.md` | 확정 (2026-11-10) |
+| SDK HTTP (Node) | Express 미들웨어 `express()`가 `http.*` 7개(요청 수, 5xx, 끊긴 요청, 응답 시간 p50·p99·max, 처리 중인 요청 수)를 모아 metrics에 넣음. 오류 미들웨어 `expressErrors()`가 Express가 잡은 예외를 `route`와 함께 보냄. SDK는 Express에 의존하지 않음. 자세한 내용은 `docs/guides/T07.md` | 확정 (2026-11-12) |
 | 웹 화면 | React + Vite | 확정 (2026-11-05) |
 | 저장소 구성 | npm workspaces 모노레포, ESM만 사용. 패키지 이름은 `@glasspod/protocol`, `@glasspod/sdk`, `@glasspod/server`, `@glasspod/web`, `@glasspod/demo-app`. 자세한 내용은 `docs/guides/T01.md` | 확정 (2026-11-05) |
 | 1차 범위 | 2장의 핵심 기능. 자동 규칙은 확장 기능 | 확정 (2026-11-05) |
@@ -93,7 +94,7 @@ Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 �
 
 수집하는 것:
 
-- **자동 수집** (`runtime.*`, `http.*`): 이벤트 루프 지연·사용률, 힙·프로세스 메모리와 컨테이너 메모리 한도, CPU 시간, HTTP 요청 수·응답 시간·에러
+- **자동 수집** (`runtime.*`, `http.*`): 이벤트 루프 지연·사용률, 힙·프로세스 메모리와 컨테이너 메모리 한도, CPU 시간, HTTP 요청 수·응답 시간·오류·끊긴 요청·처리 중인 요청(Node SDK는 Express 미들웨어로 모음)
 - **개발자 등록** (`app.*`): 큐 길이, 커넥션 수 같은 앱 고유 값과 앱 내부 상태(예: `ready`, `draining`)
 - **사건**: 예외, 상태 전환, 개발자가 정의한 이벤트
 - **자기 위치**: Pod 이름과 namespace (Downward API로 받은 환경변수)
@@ -243,7 +244,8 @@ SDK (앱 안)                         서버
 - 보낼 값이 없어도 주기마다 빈 묶음을 보냅니다. 이것이 heartbeat입니다. Node SDK는 `runtime.*` 값이 늘 있으므로 빈 묶음이 나오지 않습니다.
 - SDK는 `welcome`을 받은 때부터 한 주기마다 보내고, 연결이 끝나면 멈춥니다. 주기가 1000ms보다 짧으면 1000ms로 보냅니다(2026-11-09). 서버가 이보다 짧은 주기를 정하면 '3주기째 없음'(7.5)을 셀 때 이 하한을 함께 봅니다.
 - Node SDK가 모으는 `runtime.*` 목록과 이벤트 루프 지연을 재는 방법은 `docs/guides/T05.md` 'runtime 지표'에 있습니다. 개발자가 등록하는 이름은 `app.`으로 시작해야 합니다.
-- 응답 시간은 v1에서 SDK가 주기마다 p50과 p99를 계산해 gauge로 보냅니다.
+- 응답 시간은 v1에서 SDK가 주기마다 p50, p99, max를 계산해 gauge로 보냅니다. 그 주기에 끝난 요청이 없으면 보내지 않습니다. 프로토콜 v1에 라벨이 없어 경로별 값은 보내지 않습니다.
+- Node SDK의 `http.*` 목록과 세는 기준(오류는 5xx, 응답 전에 끊긴 요청은 따로 셈)은 `docs/guides/T07.md` 'http 지표'에 있습니다(2026-11-12). `express()`를 부르지 않은 앱은 `http.*`를 보내지 않습니다.
 
 #### event (SDK → 서버, 일어나자마자)
 
@@ -268,6 +270,7 @@ SDK (앱 안)                         서버
 - 한도는 `welcome`의 `maxEventsPerMinute`를 따릅니다. 최근 60초 동안 보낸 수가 한도에 닿으면 세어 두었다가 한도가 풀린 뒤 묶어 보냅니다. `0`이면 보내지 않습니다.
 - 예외 event의 `data`에는 `errorType`과 `stack`이 들어갑니다. 처리되지 않은 예외는 `origin`(`uncaughtException` 또는 `unhandledRejection`)을 더하고, 그 예외로 프로세스가 끝나면 `fatal: true`를 더합니다(2026-11-10).
 - 상태 전환 event는 `message`가 `app.mode: ready -> draining`, `data`가 `{ "name": "app.mode", "from": "ready", "to": "draining" }`입니다. 처음 정할 때도 보내며 그때는 `from`이 없습니다.
+- 라우트에서 난 예외를 Express가 잡아 응답할 때는 Node SDK의 오류 미들웨어가 exception event로 보내며, `data.route`에 라우트 모양(예: `GET /orders/:id`, 실제 id가 아님)을 더합니다. `status`가 400~499인 오류(404, 잘못된 요청 본문 등)는 보내지 않습니다(2026-11-12).
 - 처리되지 않은 예외는 서버로 먼저 보내고 프로세스가 종료되므로, 컨테이너가 교체돼도 직전 예외가 서버에 남습니다. 이 event는 묶기와 한도를 거치지 않고 바로 보내며, 세고 있던 같은 예외의 횟수를 `count`에 더하고 세고 있던 다른 event도 함께 보냅니다. OOMKilled는 보낼 틈이 없지만 그 직전 metrics에 힙이 늘어나는 모습이 남습니다.
 - Node SDK의 공개 API, 길이 상한, 사용 실수 처리는 `docs/guides/T06.md`에 있습니다.
 
@@ -330,13 +333,14 @@ env:
 
 세 값 가운데 하나라도 없거나 `GLASSPOD_SERVER`가 `ws://`·`wss://` 주소가 아니면 SDK는 경고 한 줄을 남기고 꺼지며, 앱은 그대로 동작합니다.
 
-앱 코드에서 SDK를 쓰는 모습입니다. `start()`와 `stop()`은 T04, `gauge()`와 `counter()`는 T05, `exception()`, `state()`, `event()`는 T06에서 만들었고, `express()`는 가칭입니다.
+앱 코드에서 SDK를 쓰는 모습입니다. `start()`와 `stop()`은 T04, `gauge()`와 `counter()`는 T05, `exception()`, `state()`, `event()`는 T06, `express()`와 `expressErrors()`는 T07에서 만들었습니다.
 
 ```js
 import { glasspod } from '@glasspod/sdk';
 
 glasspod.start({ app: { name: 'orders', version: '1.4.2' } }); // 환경변수에서 서버 주소와 Pod 정보를 읽음. app은 선택
-app.use(glasspod.express());                            // HTTP 요청 자동 수집
+app.use(glasspod.express());                            // HTTP 요청 자동 수집. 세지 않을 라우트(probe) 뒤, 다른 라우트 앞
+app.use(glasspod.expressErrors());                      // 라우트 뒤: Express가 잡은 예외를 route와 함께 보냄
 glasspod.gauge('app.queue.length', () => queue.length); // 앱 고유 값 등록. 보낼 때마다 콜백을 부름
 glasspod.counter('app.orders.created').inc();           // 누적값 등록. 같은 이름이면 같은 counter
 glasspod.state('app.mode', 'ready');                    // 상태 등록, 바뀌면 state 이벤트 전송
