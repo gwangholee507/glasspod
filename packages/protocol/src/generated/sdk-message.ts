@@ -7,11 +7,11 @@
 export type SdkMessage =
   HelloMessage | MetricsMessage | EventMessage | ResponseMessage;
 /**
- * 프로세스가 시작될 때 0부터 셉니다. 재연결해도 이어서 늘어나므로 서버가 중복과 누락을 판단할 수 있습니다.
+ * 프로세스가 시작될 때 0부터 셉니다. SDK가 실제로 보낼 때 붙이므로 보낸 순서대로 늘어나고, 재연결해도 이어집니다. SDK는 보낸 메시지를 다시 보내지 않으므로 서버는 빈틈으로 누락을 알 수 있습니다.
  */
 export type Seq = number;
 /**
- * 보낸 시각(epoch ms)입니다. 서버는 받은 시각을 따로 기록합니다.
+ * 보낸 시각(epoch ms)입니다. event만은 일어난 시각입니다(묶어 보낸 event는 그 묶음에서 처음 일어난 것, 연결이 없는 동안 들고 있다가 보낸 event도 원래 시각). 서버는 받은 시각을 따로 기록합니다.
  */
 export type Timestamp = number;
 /**

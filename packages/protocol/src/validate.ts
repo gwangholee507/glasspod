@@ -58,7 +58,7 @@ export function parseSdkMessage(text: string): ParseResult<SdkMessage> {
   return parseWith(text, sdkMessageValidator);
 }
 
-// SDK가 서버에서 받은 메시지(welcome, reject, request)를 읽습니다.
+// SDK가 서버에서 받은 메시지(welcome, reject, request, heartbeat)를 읽습니다.
 export function parseServerMessage(text: string): ParseResult<ServerMessage> {
   return parseWith(text, serverMessageValidator);
 }

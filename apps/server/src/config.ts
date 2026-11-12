@@ -5,7 +5,12 @@ export interface ServerConfig {
   // welcome으로 SDK에 알리는 metrics 주기(ms)와 1분 event 한도입니다(design.md 7.3).
   metricsIntervalMs: number;
   maxEventsPerMinute: number;
+  // welcome 뒤 SDK에 heartbeat를 보내는 주기(ms)입니다. welcome으로도 알립니다(design.md 7.4).
+  heartbeatIntervalMs: number;
 }
+
+// Node 타이머가 받는 가장 긴 간격입니다. 넘으면 Node가 1ms로 바꿔 버립니다.
+const MAX_TIMER_MS = 2_147_483_647;
 
 type Env = Record<string, string | undefined>;
 
@@ -47,6 +52,15 @@ export function loadConfig(env: Env): ServerConfig {
       120,
       0,
       Number.MAX_SAFE_INTEGER,
+    ),
+    // 서버가 직접 타이머로 보내므로 상한은 Node 타이머 상한입니다.
+    // 하한은 heartbeat가 모든 앱의 이벤트 루프를 바쁘게 만들지 않게 1초로 둡니다(스키마는 1 이상).
+    heartbeatIntervalMs: readInteger(
+      env,
+      "GLASSPOD_HEARTBEAT_INTERVAL_MS",
+      15_000,
+      1000,
+      MAX_TIMER_MS,
     ),
   };
 }

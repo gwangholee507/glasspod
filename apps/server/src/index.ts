@@ -37,6 +37,7 @@ server.listen(config.port, () => {
     protocol: PROTOCOL_VERSION,
     metricsIntervalMs: config.metricsIntervalMs,
     maxEventsPerMinute: config.maxEventsPerMinute,
+    heartbeatIntervalMs: config.heartbeatIntervalMs,
   });
 });
 

@@ -1,6 +1,7 @@
-// metrics 주기 전송입니다(design.md 7.3). welcome을 받으면 시작하고, 연결이 끝나면 멈춥니다.
-// 보낼 값이 없어도 주기마다 보내며, 이것이 heartbeat입니다. 끊긴 동안의 값 유지는 T08에서 합니다.
-// 값은 runtime.*, http.*(T07), app.* 순서로 보냅니다.
+// metrics 주기 전송입니다(design.md 7.3, 7.4). 측정은 SDK가 시작될 때부터 멈출 때까지 연결과 상관없이 이어 가고,
+// welcome을 받으면 바로 한 번 보낸 뒤 한 주기마다 보냅니다. 연결이 끝나면 보내기만 멈춥니다.
+// 끊긴 동안 따로 쌓지 않습니다. 보낼 때 읽은 값이 최신 값이고, 지연과 응답 시간은 지난 전송 뒤를 모두 덮습니다.
+// 보낼 값이 없어도 주기마다 보내며, 이것이 heartbeat입니다. 값은 runtime.*, http.*(T07), app.* 순서로 보냅니다.
 import type { MetricValue } from "@glasspod/protocol";
 import { guard } from "./guard.js";
 import type { HttpCollector } from "./http.js";
@@ -40,34 +41,42 @@ export class MetricsReporter {
     this.send = send;
   }
 
-  // 연결되면(welcome) 부릅니다. 첫 metrics는 한 주기 뒤에 보냅니다.
-  begin(requestedMs: number): void {
-    this.end();
+  // SDK가 시작될 때(start()) 부릅니다. 이벤트 루프 지연 측정을 시작합니다.
+  start(): void {
+    this.runtime.start();
+  }
+
+  // 연결되면(welcome) 부릅니다. 끊긴 동안(첫 연결이면 start() 뒤)의 값을 바로 한 번 보내고, 그 뒤 한 주기마다 보냅니다.
+  connected(requestedMs: number): void {
+    this.disconnected();
     const intervalMs = effectiveInterval(requestedMs);
     if (intervalMs !== requestedMs) {
       debug(
         `metrics interval ${requestedMs}ms from server ${intervalMs > requestedMs ? "raised" : "lowered"} to ${intervalMs}ms`,
       );
     }
-    this.runtime.start();
-    // 끊긴 동안 끝난 요청의 응답 시간은 버리고, 첫 묶음이 한 주기만 덮게 합니다.
-    this.http.resetDurations();
     const timer = setInterval(() => guard(() => this.tick()), intervalMs);
     // SDK 타이머가 앱 종료를 막지 않게 합니다.
     timer.unref();
     this.timer = timer;
     debug(`metrics every ${intervalMs}ms`);
+    this.tick();
   }
 
-  // 연결이 끝나면(끊김, stop) 부릅니다. 이벤트 루프 지연 측정도 멈춥니다.
-  end(): void {
+  // 연결이 끝나면(끊김, stop) 부릅니다. 보내기만 멈추고 측정은 이어 갑니다.
+  disconnected(): void {
     if (this.timer === undefined) {
       return;
     }
     clearInterval(this.timer);
     this.timer = undefined;
+    debug("metrics paused");
+  }
+
+  // SDK가 멈출 때(stop()) 부릅니다. 측정도 멈춥니다.
+  stop(): void {
+    this.disconnected();
     this.runtime.stop();
-    debug("metrics stopped");
   }
 
   private tick(): void {

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { decideHello } from "./handshake.js";
 
-const settings = { metricsIntervalMs: 5000, maxEventsPerMinute: 120 };
+const settings = {
+  metricsIntervalMs: 5000,
+  maxEventsPerMinute: 120,
+  heartbeatIntervalMs: 15000,
+};
 
 // design.md 7.3의 hello 예시입니다.
 const hello = {
@@ -29,6 +33,7 @@ describe("decideHello", () => {
         type: "welcome",
         metricsIntervalMs: 5000,
         maxEventsPerMinute: 120,
+        heartbeatIntervalMs: 15000,
       },
     });
   });

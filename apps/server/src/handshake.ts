@@ -15,6 +15,7 @@ export type RejectReason =
 export interface WelcomeSettings {
   metricsIntervalMs: number;
   maxEventsPerMinute: number;
+  heartbeatIntervalMs: number;
 }
 
 // detail은 서버 로그에만 남기는 설명입니다. SDK에는 reason만 보냅니다.
@@ -59,6 +60,7 @@ export function decideHello(
       type: "welcome",
       metricsIntervalMs: settings.metricsIntervalMs,
       maxEventsPerMinute: settings.maxEventsPerMinute,
+      heartbeatIntervalMs: settings.heartbeatIntervalMs,
     },
   };
 }

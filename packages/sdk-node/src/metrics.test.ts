@@ -24,7 +24,7 @@ describe("MetricsReporter", () => {
     vi.useRealTimers();
   });
 
-  it("sends runtime, http and app values every interval until end()", () => {
+  it("sends runtime, http and app values at once on connect and then every interval", () => {
     vi.useFakeTimers();
     const runtime = {
       start: vi.fn(),
@@ -53,13 +53,16 @@ describe("MetricsReporter", () => {
       (values) => sent.push(values),
     );
 
-    // 서버가 준 10ms는 1000ms로 올리고, 첫 묶음은 한 주기 뒤에 보냅니다.
-    reporter.begin(10);
+    // 측정은 SDK가 시작될 때 시작합니다.
+    reporter.start();
     expect(runtime.start).toHaveBeenCalledTimes(1);
+    // 연결되면 바로 한 번 보내고, 서버가 준 10ms는 1000ms로 올려 한 주기마다 보냅니다.
+    reporter.connected(10);
+    expect(sent).toHaveLength(1);
     vi.advanceTimersByTime(999);
-    expect(sent).toHaveLength(0);
+    expect(sent).toHaveLength(1);
     vi.advanceTimersByTime(1);
-    vi.advanceTimersByTime(2000);
+    vi.advanceTimersByTime(1000);
     expect(sent).toEqual([
       [
         { name: "runtime.heap.used_bytes", kind: "gauge", value: 100 },
@@ -78,9 +81,25 @@ describe("MetricsReporter", () => {
       ],
     ]);
 
-    reporter.end();
-    expect(runtime.stop).toHaveBeenCalledTimes(1);
+    // 끊기면 보내기만 멈추고 측정은 이어 갑니다.
+    reporter.disconnected();
     vi.advanceTimersByTime(10_000);
     expect(sent).toHaveLength(3);
+    expect(runtime.stop).not.toHaveBeenCalled();
+
+    // 다시 연결되면 바로 한 번 보냅니다.
+    reporter.connected(1000);
+    expect(sent).toHaveLength(4);
+    expect(sent[3]?.at(-1)).toEqual({
+      name: "app.queue.length",
+      kind: "gauge",
+      value: 3,
+    });
+
+    // stop()은 보내기와 측정을 모두 멈춥니다.
+    reporter.stop();
+    expect(runtime.stop).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(10_000);
+    expect(sent).toHaveLength(4);
   });
 });

@@ -84,11 +84,6 @@ export class HttpCollector {
     };
   }
 
-  // 지난 collect() 뒤에 끝난 요청의 응답 시간을 버립니다. 연결될 때 불러, 첫 묶음이 한 주기만 덮게 합니다.
-  resetDurations(): void {
-    this.durations.reset();
-  }
-
   // 보낼 http.* 값을 모으고 응답 시간 기록을 비웁니다. express()를 부르지 않았으면 빈 배열입니다.
   collect(): MetricValue[] {
     if (!this.used) {
@@ -107,7 +102,7 @@ export class HttpCollector {
         value: this.aborted,
       },
     ];
-    // 이 주기에 끝난 요청이 없으면 응답 시간은 보내지 않습니다.
+    // 지난 collect() 뒤에 끝난 요청이 없으면 응답 시간은 보내지 않습니다.
     if (this.durations.count > 0) {
       const gauge = (name: string, us: number): void => {
         values.push({ name, kind: "gauge", value: us / 1000 });

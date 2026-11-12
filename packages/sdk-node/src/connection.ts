@@ -1,6 +1,8 @@
 // SDK와 서버 사이의 WebSocket 연결을 관리합니다(design.md 7.1, 7.4).
 // 연결 → hello → welcome을 거쳐 연결된 상태가 되고, 끊기면 재연결 간격대로 다시 붙습니다.
-// Node 내장 WebSocket(undici)을 씁니다. 동작상의 제약은 docs/guides/T04.md '내장 WebSocket의 제약'에 있습니다.
+// 연결된 동안 서버 메시지(heartbeat 등)가 오래 없으면 응답 없는 연결로 보고 끊습니다(T08).
+// Node 내장 WebSocket(undici)을 씁니다. 동작상의 제약은 docs/guides/T04.md '내장 WebSocket의 제약'과
+// docs/guides/T08.md '사전 확인'에 있습니다.
 import { PROTOCOL_VERSION, parseServerMessage } from "@glasspod/protocol";
 import type {
   HelloMessage,
@@ -10,6 +12,11 @@ import type {
 } from "@glasspod/protocol";
 import { reconnectDelay } from "./backoff.js";
 import { guard } from "./guard.js";
+import {
+  LIVENESS_CHECK_MS,
+  LivenessWatch,
+  heartbeatTimeout,
+} from "./liveness.js";
 import { debug, describeError, warn } from "./log.js";
 import { SDK_VERSION } from "./version.js";
 
@@ -54,6 +61,9 @@ export class Connection {
   private outageReported = false;
   // 이번 장애에서 경고를 남긴 reject 이유입니다. 이유마다 한 번만 남깁니다.
   private readonly reportedRejects = new Set<string>();
+  // 연결된 동안 서버 메시지가 끊겼는지 지켜봅니다. welcome에 heartbeatIntervalMs가 있을 때만 있습니다.
+  private liveness:
+    { watch: LivenessWatch; timer: ReturnType<typeof setInterval> } | undefined;
 
   constructor(options: ConnectionOptions) {
     this.options = options;
@@ -92,6 +102,7 @@ export class Connection {
     }
     this.running = false;
     this.clearTimer();
+    this.stopLiveness();
     const socket = this.socket;
     const wasConnected = this.welcome !== undefined;
     this.socket = undefined;
@@ -166,6 +177,8 @@ export class Connection {
     if (socket !== this.socket) {
       return;
     }
+    // 어떤 메시지든 오면 연결이 살아 있는 것입니다.
+    this.liveness?.watch.received();
     if (typeof data !== "string") {
       debug("binary message ignored");
       return;
@@ -186,6 +199,10 @@ export class Connection {
         return;
       }
     }
+    if (message.type === "heartbeat") {
+      debug("heartbeat received");
+      return;
+    }
     // request 처리는 T09에서 합니다. 순서가 맞지 않는 welcome, reject도 무시합니다.
     debug(`${message.type} ignored`);
   }
@@ -196,11 +213,18 @@ export class Connection {
       metricsIntervalMs: message.metricsIntervalMs,
       maxEventsPerMinute: message.maxEventsPerMinute,
     };
+    if (message.heartbeatIntervalMs !== undefined) {
+      settings.heartbeatIntervalMs = message.heartbeatIntervalMs;
+    }
     this.welcome = settings;
     this.failures = 0;
     debug(
-      `welcome metricsIntervalMs=${message.metricsIntervalMs} maxEventsPerMinute=${message.maxEventsPerMinute}`,
+      `welcome metricsIntervalMs=${message.metricsIntervalMs} maxEventsPerMinute=${message.maxEventsPerMinute} heartbeatIntervalMs=${message.heartbeatIntervalMs ?? "(none)"}`,
     );
+    // heartbeat를 보내지 않는 서버(heartbeatIntervalMs 없음)에는 이 판단을 하지 않습니다.
+    if (message.heartbeatIntervalMs !== undefined) {
+      this.startLiveness(heartbeatTimeout(message.heartbeatIntervalMs));
+    }
     // 처음 연결은 조용히 넘어가고, 장애를 알린 뒤의 복구만 알립니다.
     if (this.outageReported) {
       warn(`connected to ${this.label}`);
@@ -249,6 +273,7 @@ export class Connection {
     this.welcome = undefined;
     this.rejected = false;
     this.clearTimer();
+    this.stopLiveness();
     if (socket !== undefined) {
       closeQuietly(socket);
     }
@@ -282,6 +307,37 @@ export class Connection {
   private notify(callback: (() => void) | undefined): void {
     if (callback !== undefined) {
       guard(callback);
+    }
+  }
+
+  // welcome 뒤 서버 메시지가 timeoutMs 동안 없으면 연결을 끝냅니다.
+  // 끝낸 소켓은 서버가 답하지 않으면 CLOSING에 머물 수 있습니다(docs/guides/T08.md '사전 확인').
+  private startLiveness(timeoutMs: number): void {
+    this.stopLiveness();
+    const watch = new LivenessWatch(timeoutMs);
+    const timer = setInterval(
+      () =>
+        guard(() => {
+          const check = watch.check();
+          if (check.result === "skipped") {
+            debug(
+              `heartbeat check skipped (timer was ${Math.round(check.lateMs)}ms late)`,
+            );
+          } else if (check.result === "dead") {
+            this.end(`no message from server within ${timeoutMs}ms`);
+          }
+        }),
+      LIVENESS_CHECK_MS,
+    );
+    // SDK 타이머가 앱 종료를 막지 않게 합니다.
+    timer.unref();
+    this.liveness = { watch, timer };
+  }
+
+  private stopLiveness(): void {
+    if (this.liveness !== undefined) {
+      clearInterval(this.liveness.timer);
+      this.liveness = undefined;
     }
   }
 

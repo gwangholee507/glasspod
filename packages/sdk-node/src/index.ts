@@ -1,12 +1,14 @@
 // Glasspod Node.js SDK입니다. 앱 안에서 Glasspod 서버에 WebSocket으로 붙습니다(design.md 5.1, 8장).
 // 연결된 동안 주기마다 metrics를 보내고(T05), 일이 생기자마자 event를 보냅니다(T06).
 // Express 미들웨어로 HTTP 요청을 세고, Express가 잡은 예외를 보냅니다(T07).
+// 연결이 없는 동안에도 측정은 이어 가고, event는 보관했다가 다시 연결되면 보냅니다(T08).
 import { randomUUID } from "node:crypto";
 import { readConfig } from "./config.js";
 import { Connection } from "./connection.js";
 import { watchCrashes } from "./crash.js";
 import type { OnCrash } from "./crash.js";
 import { EventAggregator } from "./events.js";
+import { guard } from "./guard.js";
 import { HttpCollector } from "./http.js";
 import type { HttpErrorMiddleware, HttpMiddleware } from "./http.js";
 import { debug, describeError, warn, WarnOnce } from "./log.js";
@@ -27,6 +29,8 @@ export interface StartOptions {
 
 // SDK 상태는 프로세스에 하나입니다.
 let connection: Connection | undefined;
+// metrics 측정과 전송입니다. start()가 연결을 만들 때 만들고 stop()에서 멈춥니다.
+let reporter: MetricsReporter | undefined;
 // 개발자가 등록한 app.* 지표입니다. start() 전에도, SDK가 꺼져 있어도 등록할 수 있습니다.
 const registry = new Registry();
 // 프로세스에서 처음 start()할 때 만들고, stop() 뒤 다시 시작해도 그대로 씁니다(design.md 7.3).
@@ -38,11 +42,16 @@ const nextSeq = (): number => seq++;
 const warnings = new WarnOnce();
 // 개발자가 정한 상태 값입니다. 연결이 없어도 기억합니다.
 const states = new StateStore(warnings);
-// 같은 이벤트를 묶고 1분 한도를 지켜 보냅니다. 연결이 없으면 버립니다(보관은 T08).
+// 같은 이벤트를 묶고 1분 한도를 지켜 보냅니다. start() 뒤 연결이 없는 동안은 보관하고, start() 전과 stop() 뒤에는 버립니다.
 const events = new EventAggregator(
   (content, ts, count) =>
     connection?.send((seq) => ({ type: "event", seq, ts, count, ...content })),
-  () => connection?.settings?.maxEventsPerMinute,
+  () => {
+    if (connection === undefined) {
+      return "off";
+    }
+    return connection.settings?.maxEventsPerMinute ?? "offline";
+  },
 );
 // HTTP 요청 집계입니다. start() 전에도, SDK가 꺼져 있어도 미들웨어를 만들고 셀 수 있습니다.
 const http = new HttpCollector();
@@ -71,8 +80,8 @@ function start(options: StartOptions = {}): void {
     }
     instanceId ??= randomUUID();
     const app = checkApp(options.app);
-    // welcome을 받으면 metrics를 보내기 시작하고, 연결이 끝나면 멈춥니다.
-    const reporter = new MetricsReporter(
+    // 측정은 지금 시작하고, welcome을 받으면 바로 한 번 보낸 뒤 주기마다 보냅니다. 연결이 끝나면 보내기만 멈춥니다.
+    const metrics = new MetricsReporter(
       new RuntimeSampler(),
       http,
       registry,
@@ -89,11 +98,18 @@ function start(options: StartOptions = {}): void {
       instanceId,
       nextSeq,
       ...(app === undefined ? {} : { app }),
-      onConnected: (settings) => reporter.begin(settings.metricsIntervalMs),
-      onDisconnected: () => reporter.end(),
+      // 보관한 event를 먼저 보내고(일어난 순서), 끊긴 동안을 덮는 metrics를 보냅니다.
+      // 한쪽에서 난 오류가 다른 쪽을 막지 않게 따로 감쌉니다.
+      onConnected: (settings) => {
+        guard(() => events.connected());
+        guard(() => metrics.connected(settings.metricsIntervalMs));
+      },
+      onDisconnected: () => metrics.disconnected(),
     });
     connection = current;
+    reporter = metrics;
     unwatchCrashes = watchCrashes(onCrash);
+    metrics.start();
     current.start();
   } catch (error) {
     debug(`start failed: ${describeError(error)}`);
@@ -123,11 +139,13 @@ function stop(): void {
     unwatchCrashes?.();
     events.reset();
     connection?.stop();
+    reporter?.stop();
   } catch (error) {
     debug(`stop failed: ${describeError(error)}`);
   } finally {
     unwatchCrashes = undefined;
     connection = undefined;
+    reporter = undefined;
   }
 }
 

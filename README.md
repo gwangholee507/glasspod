@@ -78,13 +78,14 @@ glasspod.state('app.mode', 'ready');                    // 상태 등록, 바뀌
 
 - 모노레포 골격(npm workspaces, TypeScript, Vitest)
 - SDK–서버 프로토콜 v1(JSON Schema, 스키마에서 만든 타입, 메시지 검증)
-- 서버 뼈대: `/health`, SDK용 WebSocket `/agent`. `hello`를 받아 `welcome`이나 `reject`로 답함
+- 서버 뼈대: `/health`, SDK용 WebSocket `/agent`. `hello`를 받아 `welcome`이나 `reject`로 답하고, 연결된 SDK에 주기마다 `heartbeat`를 보냄
 - Node.js SDK 연결: 환경변수에서 서버 주소와 Pod 정보를 읽어 `hello`를 보내고, 끊기면 1초부터 30초까지 늘려 가며 다시 붙음
 - Node.js SDK metrics: 이벤트 루프 지연·사용률, 메모리, CPU를 스스로 모으고, 앱이 등록한 gauge·counter와 함께 주기마다 보냄
 - Node.js SDK event: 예외, 상태 전환, 앱이 정의한 이벤트를 바로 보냄. 같은 이벤트는 10초마다 묶어 보내고, 처리되지 않은 예외는 프로세스가 끝나기 직전에 보냄
 - Node.js SDK HTTP: Express 미들웨어로 요청 수, 서버 오류, 끊긴 요청, 응답 시간(p50·p99·max), 처리 중인 요청 수를 모아 metrics에 넣음. 라우트에서 난 예외는 `GET /orders/:id` 같은 라우트 모양과 함께 보냄
+- Node.js SDK 끊김 처리: 서버에 붙기 전이나 끊긴 동안의 event를 500개까지 들고 있다가 다시 붙으면 일어난 시각 그대로 보냄. 측정은 끊긴 동안에도 이어 가고, `heartbeat`가 끊기면 응답 없는 연결로 보고 다시 붙음
 
-SDK는 아직 연결이 끊긴 동안의 데이터를 들고 있지 않고, 웹 화면은 비어 있으며, 서버는 받은 데이터를 아직 보관하지 않습니다.
+웹 화면은 비어 있고, 서버는 받은 데이터를 아직 보관하지 않습니다.
 
 첫 마일스톤은 [대표 시나리오](docs/design.md#6-대표-시나리오-pod-하나가-느려질-때)를 로컬 클러스터에서 처음부터 끝까지 돌려 보는 것입니다. 느려진 Pod 하나를 화면에서 찾고, 트래픽에서 뺀 채로 원인을 확인한 뒤 삭제합니다.
 

@@ -51,13 +51,16 @@ const welcome = {
   type: "welcome",
   metricsIntervalMs: 5000,
   maxEventsPerMinute: 120,
+  heartbeatIntervalMs: 15000,
 };
 const reject = { type: "reject", reason: "unknown-pod" };
 const request = { type: "request", id: "r-7", action: "snapshot" };
+const heartbeat = { type: "heartbeat" };
 
 const { pod: _pod, ...helloWithoutPod } = hello;
 const { type: _type, ...metricsWithoutType } = metrics;
 const { metricsIntervalMs: _interval, ...welcomeWithoutInterval } = welcome;
+const { heartbeatIntervalMs: _heartbeat, ...welcomeWithoutHeartbeat } = welcome;
 
 type Case = { name: string; input: unknown; error: string };
 
@@ -187,7 +190,7 @@ describe("parseSdkMessage", () => {
 });
 
 describe("parseServerMessage", () => {
-  it.each([welcome, reject, request])(
+  it.each([welcome, reject, request, heartbeat])(
     "accepts the design.md example: $type",
     (message) => {
       expect(parseServerMessage(JSON.stringify(message))).toEqual({
@@ -196,6 +199,12 @@ describe("parseServerMessage", () => {
       });
     },
   );
+
+  it("accepts a welcome without heartbeatIntervalMs from a server that sends no heartbeat", () => {
+    expect(parseServerMessage(JSON.stringify(welcomeWithoutHeartbeat)).ok).toBe(
+      true,
+    );
+  });
 
   it("accepts an unknown request action so the SDK can answer ok: false", () => {
     expect(
@@ -215,6 +224,11 @@ describe("parseServerMessage", () => {
       name: "a welcome without metricsIntervalMs",
       input: welcomeWithoutInterval,
       error: "property 'metricsIntervalMs'",
+    },
+    {
+      name: "a welcome with heartbeatIntervalMs 0",
+      input: { ...welcome, heartbeatIntervalMs: 0 },
+      error: "message/heartbeatIntervalMs",
     },
     {
       name: "a request with an empty id",

@@ -1,5 +1,6 @@
 // SDK의 WebSocket 연결(/agent)을 받습니다(design.md 7.1).
 // 첫 메시지로 hello를 받아 welcome 또는 reject로 답하고, 그 뒤 메시지는 검증만 합니다.
+// welcome 뒤에는 heartbeat를 주기마다 보내 SDK가 응답 없는 연결을 알아채게 합니다(design.md 7.4).
 import type { IncomingMessage, Server } from "node:http";
 import { WebSocketServer } from "ws";
 import type { RawData, WebSocket } from "ws";
@@ -19,6 +20,8 @@ const MAX_MESSAGE_BYTES = 1024 * 1024;
 const HELLO_TIMEOUT_MS = 10_000;
 // reject를 보낸 뒤 닫을 때 쓰는 WebSocket 종료 코드입니다(1008: 정책 위반).
 const CLOSE_POLICY_VIOLATION = 1008;
+// heartbeat 메시지는 늘 같으므로 한 번만 만듭니다.
+const HEARTBEAT_TEXT = JSON.stringify({ type: "heartbeat" });
 
 export function attachAgentServer(
   server: Server,
@@ -46,6 +49,8 @@ function handleConnection(
   const remote = request.socket.remoteAddress;
   let hello: HelloMessage | undefined;
   let rejected = false;
+  // welcome을 보낸 뒤 heartbeat를 보내는 타이머입니다. 연결이 끝나면 멈춥니다.
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
   // 로그에 붙이는 연결 정보입니다. hello를 받은 뒤에는 Pod와 인스턴스를 붙입니다.
   const fields = (): LogFields =>
@@ -91,6 +96,13 @@ function handleConnection(
       clearTimeout(helloTimer);
       hello = decision.hello;
       socket.send(JSON.stringify(decision.welcome));
+      // SDK는 이 메시지에 답하지 않습니다. 응답이 없다고 서버가 연결을 닫지도 않습니다.
+      // 앱의 이벤트 루프가 막히면 SDK가 답할 수 없어, 앱 멈춤과 연결 끊김을 구분하지 못하게 되기 때문입니다.
+      heartbeatTimer = setInterval(() => {
+        if (socket.readyState === socket.OPEN) {
+          socket.send(HEARTBEAT_TEXT);
+        }
+      }, config.heartbeatIntervalMs);
       log.info("hello accepted", {
         ...fields(),
         sdk: `${hello.sdk.lang}@${hello.sdk.version}`,
@@ -123,6 +135,7 @@ function handleConnection(
 
   socket.on("close", (code, reason) => {
     clearTimeout(helloTimer);
+    clearInterval(heartbeatTimer);
     log.info("agent disconnected", {
       ...fields(),
       code,

@@ -30,14 +30,14 @@ export const sdkMessageSchema = {
     Seq: {
       title: "Seq",
       description:
-        "프로세스가 시작될 때 0부터 셉니다. 재연결해도 이어서 늘어나므로 서버가 중복과 누락을 판단할 수 있습니다.",
+        "프로세스가 시작될 때 0부터 셉니다. SDK가 실제로 보낼 때 붙이므로 보낸 순서대로 늘어나고, 재연결해도 이어집니다. SDK는 보낸 메시지를 다시 보내지 않으므로 서버는 빈틈으로 누락을 알 수 있습니다.",
       type: "integer",
       minimum: 0,
     },
     Timestamp: {
       title: "Timestamp",
       description:
-        "보낸 시각(epoch ms)입니다. 서버는 받은 시각을 따로 기록합니다.",
+        "보낸 시각(epoch ms)입니다. event만은 일어난 시각입니다(묶어 보낸 event는 그 묶음에서 처음 일어난 것, 연결이 없는 동안 들고 있다가 보낸 event도 원래 시각). 서버는 받은 시각을 따로 기록합니다.",
       type: "integer",
       minimum: 0,
     },
@@ -296,6 +296,9 @@ export const serverMessageSchema = {
     {
       $ref: "#/definitions/Request",
     },
+    {
+      $ref: "#/definitions/Heartbeat",
+    },
   ],
   definitions: {
     Welcome: {
@@ -318,6 +321,12 @@ export const serverMessageSchema = {
             "1분에 보낼 수 있는 event 수입니다. 넘으면 SDK가 같은 이벤트를 묶습니다.",
           type: "integer",
           minimum: 0,
+        },
+        heartbeatIntervalMs: {
+          description:
+            "서버가 heartbeat를 보내는 주기(ms)입니다. SDK는 서버 메시지가 이 주기의 3배 동안 없으면 연결이 죽은 것으로 보고 다시 붙습니다. 없으면 서버가 heartbeat를 보내지 않는 것이므로 SDK는 이 판단을 하지 않습니다.",
+          type: "integer",
+          minimum: 1,
         },
       },
     },
@@ -359,6 +368,18 @@ export const serverMessageSchema = {
             "요청 종류입니다. v1은 snapshot 하나입니다. 모르는 action이면 SDK는 ok를 false로 답합니다.",
           type: "string",
           minLength: 1,
+        },
+      },
+    },
+    Heartbeat: {
+      title: "HeartbeatMessage",
+      description:
+        "welcome 뒤 heartbeatIntervalMs마다 보냅니다. SDK가 응답 없는 연결(반쯤 열린 연결)을 알아채게 하려는 것이고, SDK는 답하지 않습니다.",
+      type: "object",
+      required: ["type"],
+      properties: {
+        type: {
+          const: "heartbeat",
         },
       },
     },

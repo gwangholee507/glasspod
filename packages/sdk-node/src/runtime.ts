@@ -1,5 +1,5 @@
 // SDK가 스스로 모으는 runtime.* 지표입니다(design.md 5.1, docs/guides/T05.md 'runtime 지표').
-// 연결된 동안에만 돌고, collect()를 부를 때마다 지난 collect() 뒤의 값을 돌려줍니다.
+// SDK가 시작된 동안(start()부터 stop()까지) 연결과 상관없이 돌고, collect()를 부를 때마다 지난 collect() 뒤의 값을 돌려줍니다.
 import type { MetricValue } from "@glasspod/protocol";
 import { totalmem } from "node:os";
 import { createHistogram, performance } from "node:perf_hooks";

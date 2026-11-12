@@ -8,7 +8,8 @@
   "oneOf": [
     { "$ref": "#/definitions/Welcome" },
     { "$ref": "#/definitions/Reject" },
-    { "$ref": "#/definitions/Request" }
+    { "$ref": "#/definitions/Request" },
+    { "$ref": "#/definitions/Heartbeat" }
   ],
   "definitions": {
     "Welcome": {
@@ -27,6 +28,11 @@
           "description": "1분에 보낼 수 있는 event 수입니다. 넘으면 SDK가 같은 이벤트를 묶습니다.",
           "type": "integer",
           "minimum": 0
+        },
+        "heartbeatIntervalMs": {
+          "description": "서버가 heartbeat를 보내는 주기(ms)입니다. SDK는 서버 메시지가 이 주기의 3배 동안 없으면 연결이 죽은 것으로 보고 다시 붙습니다. 없으면 서버가 heartbeat를 보내지 않는 것이므로 SDK는 이 판단을 하지 않습니다.",
+          "type": "integer",
+          "minimum": 1
         }
       }
     },
@@ -61,6 +67,15 @@
           "type": "string",
           "minLength": 1
         }
+      }
+    },
+    "Heartbeat": {
+      "title": "HeartbeatMessage",
+      "description": "welcome 뒤 heartbeatIntervalMs마다 보냅니다. SDK가 응답 없는 연결(반쯤 열린 연결)을 알아채게 하려는 것이고, SDK는 답하지 않습니다.",
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "heartbeat" }
       }
     }
   }
