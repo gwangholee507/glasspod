@@ -4,7 +4,12 @@
   "private": true,
   "license": "MIT",
   "type": "module",
+  "scripts": {
+    "start": "node --conditions=@glasspod/source --import tsx src/index.ts",
+    "load": "node --conditions=@glasspod/source --import tsx src/load.ts"
+  },
   "dependencies": {
-    "@glasspod/sdk": "0.0.0"
+    "@glasspod/sdk": "0.0.0",
+    "express": "5.3.0"
   }
 }

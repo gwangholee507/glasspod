@@ -20,7 +20,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "generate": "npm run generate -w @glasspod/protocol",
-    "dev:server": "npm run dev -w @glasspod/server"
+    "dev:server": "npm run dev -w @glasspod/server",
+    "demo": "npm run start -w @glasspod/demo-app",
+    "demo:load": "npm run load -w @glasspod/demo-app"
   },
   "devDependencies": {
     "@types/express": "5.0.6",

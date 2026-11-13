@@ -85,6 +85,7 @@ glasspod.state('app.mode', 'ready');                    // 상태 등록, 바뀌
 - Node.js SDK HTTP: Express 미들웨어로 요청 수, 서버 오류, 끊긴 요청, 응답 시간(p50·p99·max), 처리 중인 요청 수를 모아 metrics에 넣음. 라우트에서 난 예외는 `GET /orders/:id` 같은 라우트 모양과 함께 보냄
 - Node.js SDK 끊김 처리: 서버에 붙기 전이나 끊긴 동안의 event를 500개까지 들고 있다가 다시 붙으면 일어난 시각 그대로 보냄. 측정은 끊긴 동안에도 이어 가고, `heartbeat`가 끊기면 응답 없는 연결로 보고 다시 붙음
 - snapshot: `GET /api/pods/:namespace/:name/snapshot`으로 Pod 하나의 지금 상태(상태 값, 처리 중인 요청과 경과 시간, 프로세스 정보)를 그 Pod의 SDK에 물어봄. 5초 안에 답이 없으면 응답 없음(504)으로 알려 앱이 막혔는지 보여 줌
+- 데모 앱: SDK를 넣은 주문 앱 흉내(`examples/demo-app`)와 부하 스크립트. 관리 포트의 HTTP API로 느려짐, 이벤트 루프 막힘, 예외 폭주, 크래시, 메모리 증가를 일부러 일으킴. `npm run dev:server`, `npm run demo`, `npm run demo:load`로 노트북에서 띄워 볼 수 있음
 
 웹 화면은 비어 있고, 서버는 받은 데이터를 아직 보관하지 않습니다.
 
