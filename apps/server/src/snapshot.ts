@@ -1,35 +1,19 @@
 // snapshot 조회입니다(design.md 7.3 request / response, docs/guides/T09.md).
 // 그 Pod의 SDK에 snapshot request를 보내고, 결과를 HTTP 상태 코드와 JSON으로 바꿉니다. 서버는 결과를 보관하지 않습니다.
 import { validateSnapshotData } from "@glasspod/protocol";
-import type { HelloMessage, PodRef, SnapshotData } from "@glasspod/protocol";
+import type {
+  HelloMessage,
+  PodRef,
+  SnapshotBody,
+  SnapshotErrorBody,
+  SnapshotErrorCode,
+} from "@glasspod/protocol";
 import type { AgentRegistry } from "./agents.js";
 import { log } from "./log.js";
 import { MAX_PENDING_REQUESTS } from "./requests.js";
 import type { RequestOutcome } from "./requests.js";
 
-export type SnapshotErrorCode =
-  | "not-connected"
-  | "not-supported"
-  | "busy"
-  | "no-response"
-  | "disconnected"
-  | "sdk-error"
-  | "invalid-response";
-
-// 성공했을 때의 본문입니다. ts는 SDK가 답을 보낸 시각(SDK 시계), elapsedMs는 보낸 때부터 받을 때까지입니다.
-export interface SnapshotBody {
-  pod: PodRef;
-  instanceId: string;
-  ts: number;
-  elapsedMs: number;
-  snapshot: SnapshotData;
-}
-
-export interface SnapshotErrorBody {
-  error: SnapshotErrorCode;
-  detail: string;
-}
-
+// 본문 타입(SnapshotBody, SnapshotErrorBody)은 웹 화면과 함께 쓰므로 @glasspod/protocol의 http.ts에 있습니다.
 export interface SnapshotReply {
   status: number;
   body: SnapshotBody | SnapshotErrorBody;

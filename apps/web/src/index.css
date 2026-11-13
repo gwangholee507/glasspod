@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+/*
+ * 브랜드 색과 글꼴입니다(design.md 12장). 여기 적은 값은 Tailwind 클래스(bg-paper, text-deep-teal, font-brand 등)가 되고
+ * :root의 CSS 변수(--color-paper 등)로도 나옵니다. 색과 글꼴은 이곳에서만 정합니다.
+ * 글꼴 파일은 아직 넣지 않았습니다. 설치되어 있지 않으면 대체 글꼴로 보입니다(docs/guides/T17.md 결정 18).
+ * 다크 모드 색은 D9에서 정합니다.
+ */
+@theme {
+  --color-deep-teal: #0b5f6e;
+  --color-glass-cyan: #0e9db5;
+  --color-mist: #d9f3f7;
+  --color-paper: #f7fbfc;
+  --color-coral: #ff7a59;
+
+  --font-sans:
+    "Pretendard", system-ui, -apple-system, "Apple SD Gothic Neo",
+    "Noto Sans KR", sans-serif;
+  --font-brand: "Manrope", system-ui, -apple-system, sans-serif;
+  --font-mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@layer base {
+  body {
+    @apply bg-paper text-slate-800 antialiased;
+  }
+}

@@ -68,6 +68,7 @@ Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 �
 | 데모 앱 | 주문 앱 흉내(`examples/demo-app`): 주문 조회·접수 API, 큐와 작업자, 가짜 DB. 관리 포트(기본 `127.0.0.1:3001`)의 HTTP API로 느려짐, 이벤트 루프 막힘, 예외 폭주, 크래시, 메모리 증가를 켜고 끔. 고장은 SDK로 알리지 않음. 부하는 같은 워크스페이스의 부하 스크립트로 만듦(요청마다 새 연결). 자세한 내용은 `docs/guides/T10.md` | 확정 (2026-11-13) |
 | SDK 끊김 처리 (Node) | 연결이 없는 동안(첫 연결 전 포함) event를 500개까지 들고 있다가 다시 연결되면 원래 `ts`로, 1분 한도 안에서 보냄. ack는 없고 `seq`는 보낸 순서. 측정은 연결과 상관없이 이어 가고 `welcome` 직후 metrics를 바로 보냄. 서버가 `heartbeat`를 보내고, SDK는 3주기 동안 서버 메시지가 없으면 다시 붙음(7.4). 자세한 내용은 `docs/guides/T08.md` | 확정 (2026-11-12) |
 | 웹 화면 | React + Vite | 확정 (2026-11-05) |
+| 웹 뼈대 | 라우팅은 React Router 7(선언형 모드), 서버 API는 내장 `fetch`를 감싼 클라이언트로 부르고 실패는 서버의 오류 본문 `{ error, detail }` 모양으로 다룸, 스타일은 Tailwind CSS 4(브랜드 색·글꼴은 `@theme` 한곳). 브라우저는 같은 출처의 `/api`만 부르고, 개발 서버(Vite)가 그것을 Glasspod 서버로 넘김(`GLASSPOD_WEB_PROXY_TARGET`). 서버와 웹이 함께 쓰는 HTTP API 본문 타입은 `@glasspod/protocol`의 `http.ts`(손으로 쓴 타입). 자세한 내용은 `docs/guides/T17.md` | 확정 (2026-11-14) |
 | 저장소 구성 | npm workspaces 모노레포, ESM만 사용. 패키지 이름은 `@glasspod/protocol`, `@glasspod/sdk`, `@glasspod/server`, `@glasspod/web`, `@glasspod/demo-app`. 자세한 내용은 `docs/guides/T01.md` | 확정 (2026-11-05) |
 | 1차 범위 | 2장의 핵심 기능. 자동 규칙은 확장 기능 | 확정 (2026-11-05) |
 | 서버 데이터 보관 | 10장 | 미정 |

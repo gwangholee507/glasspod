@@ -6,6 +6,7 @@
     { "path": "packages/sdk-node" },
     { "path": "apps/server" },
     { "path": "apps/web" },
+    { "path": "apps/web/tsconfig.node.json" },
     { "path": "examples/demo-app" }
   ]
 }
