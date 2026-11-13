@@ -3,8 +3,14 @@ import { EventEmitter } from "node:events";
 import { createServer, get } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HttpCollector, MAX_ROUTE_CHARS, describeRoute } from "./http.js";
+import {
+  HttpCollector,
+  MAX_IN_FLIGHT,
+  MAX_ROUTE_CHARS,
+  describeRoute,
+} from "./http.js";
 
 // 이름으로 값을 찾기 쉽게 바꿉니다.
 function byName(values: MetricValue[]): Record<string, number> {
@@ -148,6 +154,62 @@ describe("HttpCollector metrics", () => {
         throw new Error("app error");
       }),
     ).toThrow("app error");
+  });
+});
+
+describe("HttpCollector in-flight requests", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("lists unfinished requests oldest first, with the route shape or only the method", () => {
+    const http = new HttpCollector();
+    const middleware = http.middleware();
+    const clock = vi.spyOn(performance, "now");
+
+    clock.mockReturnValue(1000);
+    const routed = fakeExchange({ method: "GET", baseUrl: "/orders" });
+    middleware(routed.req, routed.res, () => {});
+    // Express가 라우트를 정하면 라우트 모양을 씁니다.
+    routed.req.route = { path: "/:id" };
+    clock.mockReturnValue(1500);
+    // 라우트 앞 미들웨어(예: 본문 파싱)에서 기다리는 요청은 메서드만 씁니다.
+    const waiting = fakeExchange({ method: "POST" });
+    middleware(waiting.req, waiting.res, () => {});
+    clock.mockReturnValue(1800);
+    const finished = fakeExchange();
+    middleware(finished.req, finished.res, () => {});
+    finished.res.emit("close");
+
+    expect(http.inFlightRequests(9200.4)).toEqual([
+      { route: "GET /orders/:id", elapsedMs: 8200 },
+      { route: "POST", elapsedMs: 7700 },
+    ]);
+    expect(byName(http.collect())["http.requests.in_flight"]).toBe(2);
+
+    routed.res.emit("close");
+    expect(http.inFlightRequests(9300)).toEqual([
+      { route: "POST", elapsedMs: 7800 },
+    ]);
+  });
+
+  it(`keeps only the oldest ${MAX_IN_FLIGHT} requests`, () => {
+    const http = new HttpCollector();
+    const middleware = http.middleware();
+    const clock = vi.spyOn(performance, "now");
+    for (let i = 0; i <= MAX_IN_FLIGHT; i += 1) {
+      clock.mockReturnValue(i);
+      const { req, res } = fakeExchange();
+      middleware(req, res, () => {});
+    }
+    const list = http.inFlightRequests(1000);
+    expect(list).toHaveLength(MAX_IN_FLIGHT);
+    expect(list[0]?.elapsedMs).toBe(1000);
+    expect(list.at(-1)?.elapsedMs).toBe(1000 - (MAX_IN_FLIGHT - 1));
+  });
+
+  it("is empty when no middleware was created", () => {
+    expect(new HttpCollector().inFlightRequests()).toEqual([]);
   });
 });
 

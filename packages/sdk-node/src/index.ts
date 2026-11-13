@@ -2,6 +2,7 @@
 // 연결된 동안 주기마다 metrics를 보내고(T05), 일이 생기자마자 event를 보냅니다(T06).
 // Express 미들웨어로 HTTP 요청을 세고, Express가 잡은 예외를 보냅니다(T07).
 // 연결이 없는 동안에도 측정은 이어 가고, event는 보관했다가 다시 연결되면 보냅니다(T08).
+// 서버의 snapshot 요청에 상태 값, 진행 중인 요청, 프로세스 정보로 답합니다(T09).
 import { randomUUID } from "node:crypto";
 import { readConfig } from "./config.js";
 import { Connection } from "./connection.js";
@@ -18,6 +19,13 @@ import type { Counter } from "./registry.js";
 import { customEventContent, exceptionContent } from "./reports.js";
 import type { EventOptions } from "./reports.js";
 import { RuntimeSampler } from "./runtime.js";
+import {
+  SUPPORTED_ACTIONS,
+  answerRequest,
+  buildSnapshot,
+  describeAnswer,
+} from "./snapshot.js";
+import type { SnapshotSources } from "./snapshot.js";
 import { StateStore } from "./states.js";
 
 export type { Counter, EventOptions, HttpErrorMiddleware, HttpMiddleware };
@@ -55,6 +63,11 @@ const events = new EventAggregator(
 );
 // HTTP 요청 집계입니다. start() 전에도, SDK가 꺼져 있어도 미들웨어를 만들고 셀 수 있습니다.
 const http = new HttpCollector();
+// snapshot에 넣을 값을 읽는 곳입니다(T09).
+const snapshotSources: SnapshotSources = {
+  states: () => states.current(),
+  inFlight: () => http.inFlightRequests(),
+};
 // 처리되지 않은 예외 감시를 끄는 함수입니다. start()가 연결을 만들 때 켭니다.
 let unwatchCrashes: (() => void) | undefined;
 
@@ -98,6 +111,7 @@ function start(options: StartOptions = {}): void {
       instanceId,
       nextSeq,
       ...(app === undefined ? {} : { app }),
+      capabilities: SUPPORTED_ACTIONS,
       // 보관한 event를 먼저 보내고(일어난 순서), 끊긴 동안을 덮는 metrics를 보냅니다.
       // 한쪽에서 난 오류가 다른 쪽을 막지 않게 따로 감쌉니다.
       onConnected: (settings) => {
@@ -105,6 +119,22 @@ function start(options: StartOptions = {}): void {
         guard(() => metrics.connected(settings.metricsIntervalMs));
       },
       onDisconnected: () => metrics.disconnected(),
+      // 그 자리에서 만들어 바로 답합니다. 앱이 막혀 있으면 이 콜백도 늦게 불리고, 서버는 5초 뒤 응답 없음으로 봅니다.
+      onRequest: (request) => {
+        const content = answerRequest(request.action, () =>
+          buildSnapshot(snapshotSources),
+        );
+        const sent = current.send((seq) => ({
+          type: "response",
+          seq,
+          ts: Date.now(),
+          replyTo: request.id,
+          ...content,
+        }));
+        debug(
+          `response sent seq=${sent ?? "(not connected)"} replyTo=${request.id} ${describeAnswer(content)}`,
+        );
+      },
     });
     connection = current;
     reporter = metrics;

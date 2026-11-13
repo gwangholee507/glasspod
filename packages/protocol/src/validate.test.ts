@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseSdkMessage, parseServerMessage } from "./validate.js";
+import {
+  parseSdkMessage,
+  parseServerMessage,
+  validateSnapshotData,
+} from "./validate.js";
 import type { ParseResult } from "./validate.js";
 
 // design.md 7.3의 예시 메시지입니다. 설계 문서의 예시가 스키마를 통과해야 합니다.
@@ -237,5 +241,54 @@ describe("parseServerMessage", () => {
     },
   ])("rejects $name", ({ input, error }) => {
     expectError(parseServerMessage(toText(input)), error);
+  });
+});
+
+describe("validateSnapshotData", () => {
+  const { process: _process, ...dataWithoutProcess } = response.data;
+
+  it("accepts the design.md example", () => {
+    expect(validateSnapshotData(response.data)).toEqual({
+      ok: true,
+      message: response.data,
+    });
+  });
+
+  it("accepts an empty state and no requests in flight", () => {
+    expect(
+      validateSnapshotData({ ...response.data, state: {}, inFlight: [] }).ok,
+    ).toBe(true);
+  });
+
+  it.each<Case>([
+    {
+      name: "a missing process",
+      input: dataWithoutProcess,
+      error: "data must have required property 'process'",
+    },
+    {
+      name: "a state value that is not a string",
+      input: { ...response.data, state: { "app.mode": 1 } },
+      error: "data/state/app.mode",
+    },
+    {
+      name: "a negative elapsedMs",
+      input: {
+        ...response.data,
+        inFlight: [{ route: "GET /orders", elapsedMs: -1 }],
+      },
+      error: "data/inFlight/0/elapsedMs",
+    },
+    {
+      name: "a fractional heapUsedBytes",
+      input: {
+        ...response.data,
+        process: { uptimeSec: 1, heapUsedBytes: 1.5 },
+      },
+      error: "data/process/heapUsedBytes",
+    },
+    { name: "a value that is not an object", input: null, error: "data" },
+  ])("rejects $name", ({ input, error }) => {
+    expectError(validateSnapshotData(input), error);
   });
 });

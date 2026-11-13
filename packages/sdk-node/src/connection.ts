@@ -1,12 +1,14 @@
 // SDK와 서버 사이의 WebSocket 연결을 관리합니다(design.md 7.1, 7.4).
 // 연결 → hello → welcome을 거쳐 연결된 상태가 되고, 끊기면 재연결 간격대로 다시 붙습니다.
 // 연결된 동안 서버 메시지(heartbeat 등)가 오래 없으면 응답 없는 연결로 보고 끊습니다(T08).
+// 연결된 동안 받은 request는 onRequest로 넘기고, 답은 send()로 보냅니다(T09).
 // Node 내장 WebSocket(undici)을 씁니다. 동작상의 제약은 docs/guides/T04.md '내장 WebSocket의 제약'과
 // docs/guides/T08.md '사전 확인'에 있습니다.
 import { PROTOCOL_VERSION, parseServerMessage } from "@glasspod/protocol";
 import type {
   HelloMessage,
   PodRef,
+  RequestMessage,
   SdkMessage,
   WelcomeMessage,
 } from "@glasspod/protocol";
@@ -31,11 +33,15 @@ export interface ConnectionOptions {
   pod: PodRef;
   instanceId: string;
   app?: HelloMessage["app"];
+  // 이 SDK가 답할 수 있는 request의 action입니다. hello의 capabilities로 보냅니다(T09).
+  capabilities?: readonly string[];
   // 프로세스에 하나뿐인 seq 카운터입니다. 재연결하거나 다시 시작해도 이어집니다(design.md 7.2).
   nextSeq: () => number;
   // welcome을 받아 연결된 때와, 그 연결이 끝난 때(끊김, stop) 부릅니다. metrics(T05)가 씁니다.
   onConnected?: (settings: ServerSettings) => void;
   onDisconnected?: () => void;
+  // welcome을 받은 연결에서 request가 오면 부릅니다. 답은 send()로 보냅니다(T09).
+  onRequest?: (request: RequestMessage) => void;
 }
 
 // welcome으로 받은 주기와 한도입니다. metrics(T05)와 event(T06)가 씁니다.
@@ -151,7 +157,7 @@ export class Connection {
     if (socket !== this.socket) {
       return;
     }
-    const { pod, instanceId, app } = this.options;
+    const { pod, instanceId, app, capabilities } = this.options;
     const hello: HelloMessage = {
       type: "hello",
       seq: this.options.nextSeq(),
@@ -163,6 +169,9 @@ export class Connection {
     };
     if (app !== undefined) {
       hello.app = app;
+    }
+    if (capabilities !== undefined) {
+      hello.capabilities = [...capabilities];
     }
     socket.send(JSON.stringify(hello));
     debug(
@@ -203,7 +212,16 @@ export class Connection {
       debug("heartbeat received");
       return;
     }
-    // request 처리는 T09에서 합니다. 순서가 맞지 않는 welcome, reject도 무시합니다.
+    // 서버는 welcome 뒤에만 request를 보냅니다. welcome 전이면 답할 연결이 아니므로 무시합니다.
+    if (message.type === "request" && this.welcome !== undefined) {
+      debug(`request received id=${message.id} action=${message.action}`);
+      const { onRequest } = this.options;
+      if (onRequest !== undefined) {
+        this.notify(() => onRequest(message));
+      }
+      return;
+    }
+    // 순서가 맞지 않는 welcome, reject, welcome 전의 request는 무시합니다.
     debug(`${message.type} ignored`);
   }
 

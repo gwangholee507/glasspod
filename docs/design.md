@@ -64,6 +64,7 @@ Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 �
 | SDK metrics (Node) | `runtime.*` 11개를 스스로 모음(이벤트 루프 지연·사용률, 힙·RSS·컨테이너 메모리 한도, CPU). 개발자 등록은 gauge 콜백 `gauge(name, fn)`과 counter 객체 `counter(name).inc(n)`, 이름은 `app.*`만, 100개까지. 연결된 동안 welcome의 주기(1초 이상)로 보냄. 자세한 내용은 `docs/guides/T05.md` | 확정 (2026-11-09) |
 | SDK event (Node) | 공개 API는 `exception(error, data?)`, `state(name, value)`, `event(name, options?)`. 같은 이벤트는 첫 건을 바로 보내고 그 뒤 10초씩 묶어 `count`로 보냄. 처리되지 않은 예외는 `uncaughtExceptionMonitor`에서 바로 보내고 기다리지 않음. 자세한 내용은 `docs/guides/T06.md` | 확정 (2026-11-10) |
 | SDK HTTP (Node) | Express 미들웨어 `express()`가 `http.*` 7개(요청 수, 5xx, 끊긴 요청, 응답 시간 p50·p99·max, 처리 중인 요청 수)를 모아 metrics에 넣음. 오류 미들웨어 `expressErrors()`가 Express가 잡은 예외를 `route`와 함께 보냄. SDK는 Express에 의존하지 않음. 자세한 내용은 `docs/guides/T07.md` | 확정 (2026-11-12) |
+| snapshot | 서버의 HTTP `GET /api/pods/:namespace/:name/snapshot`이 그 Pod의 SDK에 `request`를 보내고 5초까지 기다려 JSON으로 돌려줌(답이 없으면 504). SDK는 `hello`의 `capabilities`에 `snapshot`을 넣고, 상태 값·처리 중인 요청·프로세스 정보로 바로 답함. 연결마다 기다리는 요청 5개까지. 서버는 결과를 보관하지 않음. 자세한 내용은 `docs/guides/T09.md` | 확정 (2026-11-13) |
 | SDK 끊김 처리 (Node) | 연결이 없는 동안(첫 연결 전 포함) event를 500개까지 들고 있다가 다시 연결되면 원래 `ts`로, 1분 한도 안에서 보냄. ack는 없고 `seq`는 보낸 순서. 측정은 연결과 상관없이 이어 가고 `welcome` 직후 metrics를 바로 보냄. 서버가 `heartbeat`를 보내고, SDK는 3주기 동안 서버 메시지가 없으면 다시 붙음(7.4). 자세한 내용은 `docs/guides/T08.md` | 확정 (2026-11-12) |
 | 웹 화면 | React + Vite | 확정 (2026-11-05) |
 | 저장소 구성 | npm workspaces 모노레포, ESM만 사용. 패키지 이름은 `@glasspod/protocol`, `@glasspod/sdk`, `@glasspod/server`, `@glasspod/web`, `@glasspod/demo-app`. 자세한 내용은 `docs/guides/T01.md` | 확정 (2026-11-05) |
@@ -304,9 +305,12 @@ SDK (앱 안)                         서버
 ```
 
 - v1의 요청은 `snapshot` 하나입니다. 등록된 상태 값, 진행 중인 요청과 경과 시간, 프로세스 정보를 돌려줍니다.
+- SDK는 답할 수 있는 요청을 `hello`의 `capabilities`로 알립니다(Node SDK는 `["snapshot"]`, 2026-11-13). 서버는 알리지 않은 요청을 보내지 않습니다. 예전 SDK는 `request`를 무시하므로, 보내면 응답 없음으로 앱 멈춤처럼 보이기 때문입니다.
+- `inFlight`는 시작한 순서(경과 시간이 긴 것부터)로 적습니다. `route`는 라우트 모양(`GET /orders/:id`)이고, 라우트가 정해지기 전(라우트 앞 미들웨어)이면 메서드만(`GET`) 씁니다. 실제 경로는 id와 개인 정보가 들어갈 수 있어 쓰지 않습니다. Node SDK는 `express()` 미들웨어가 센 요청 가운데 끝나지 않은 것을 100개까지 넣습니다(2026-11-13).
 - `action`은 정해진 값 목록이 없는 문자열입니다. SDK는 모르는 `action`을 받으면 `"ok": false`로 답합니다.
 - 실패하면 `"ok": false`와 `error` 필드로 이유를 돌려줍니다.
-- 서버는 5초 안에 답이 없으면 "응답 없음"으로 표시합니다. 이것도 이벤트 루프가 막혔다는 단서입니다.
+- 서버는 5초 안에 답이 없으면 "응답 없음"으로 표시합니다. 이것도 이벤트 루프가 막혔다는 단서입니다. 그 뒤에 온 답은 버리고, 연결은 닫지 않습니다.
+- 개발자는 서버의 HTTP `GET /api/pods/:namespace/:name/snapshot`으로 물어봅니다(2026-11-13). 서버는 가장 최근에 `hello`를 받아들인 그 Pod의 연결로 `request`를 보내고, 결과를 상태 코드로 나눠 돌려줍니다: 200 답함, 404 연결 없음, 501 `capabilities`에 없음, 429 기다리는 요청이 이미 5개, 504 응답 없음, 502 기다리는 동안 끊김·SDK가 `ok: false`·`data`가 스키마와 맞지 않음. 서버는 받은 `data`를 `snapshot.schema.json`으로 검증하고 보관하지 않습니다. 자세한 형식은 `docs/guides/T09.md`에 있습니다.
 - 서버가 SDK에 보내는 요청은 정보 조회만 허용합니다. 앱 상태를 바꾸는 요청은 만들지 않습니다.
 
 ### 7.4 연결이 끊겼을 때 (SDK)

@@ -7,5 +7,9 @@ export type * from "./generated/sdk-message.js";
 export type * from "./generated/server-message.js";
 export type * from "./generated/snapshot.js";
 
-export { parseSdkMessage, parseServerMessage } from "./validate.js";
+export {
+  parseSdkMessage,
+  parseServerMessage,
+  validateSnapshotData,
+} from "./validate.js";
 export type { ParseResult } from "./validate.js";

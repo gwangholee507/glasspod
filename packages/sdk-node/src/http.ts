@@ -1,7 +1,8 @@
 // HTTP 요청 자동 수집입니다(design.md 5.1, 7.3, docs/guides/T07.md).
 // Express 미들웨어로 요청 수, 오류, 끊긴 요청, 응답 시간, 처리 중인 요청 수를 모으고,
 // 오류 미들웨어로 Express가 잡은 예외를 route와 함께 넘깁니다. SDK는 Express에 의존하지 않습니다.
-import type { MetricValue } from "@glasspod/protocol";
+// 처리 중인 요청은 시작 시각과 함께 들고 있다가 snapshot의 inFlight로 돌려줍니다(docs/guides/T09.md).
+import type { MetricValue, SnapshotData } from "@glasspod/protocol";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createHistogram, performance } from "node:perf_hooks";
 import type { RecordableHistogram } from "node:perf_hooks";
@@ -11,6 +12,11 @@ import { truncate } from "./reports.js";
 
 // route 글자 수 상한입니다. 라우트 경로는 개발자가 정하므로 보통은 닿지 않습니다.
 export const MAX_ROUTE_CHARS = 200;
+// snapshot의 inFlight에 넣는 요청 수 상한입니다. 오래된 것부터 넣습니다.
+export const MAX_IN_FLIGHT = 100;
+
+// snapshot의 inFlight 항목입니다. 예: { route: "GET /orders/:id", elapsedMs: 8200 }
+export type InFlightRequest = SnapshotData["inFlight"][number];
 
 // Express의 next와 같은 모양입니다. 값을 주면 오류로 넘깁니다.
 export type NextFunction = (error?: unknown) => void;
@@ -49,7 +55,9 @@ export class HttpCollector {
   private total = 0;
   private errors = 0;
   private aborted = 0;
-  private inFlight = 0;
+  // 처리 중인 요청과 시작 시각(performance.now())입니다. 끝나면 지웁니다.
+  // 수는 in_flight 값이고, 목록은 snapshot의 inFlight입니다. Map은 넣은 순서로 돌므로 오래된 것이 앞에 있습니다.
+  private readonly active = new Map<IncomingMessage, number>();
   // 끝난 요청의 응답 시간(마이크로초)입니다. collect()마다 비웁니다.
   private readonly durations: RecordableHistogram = createHistogram();
 
@@ -115,9 +123,25 @@ export class HttpCollector {
     values.push({
       name: "http.requests.in_flight",
       kind: "gauge",
-      value: this.inFlight,
+      value: this.active.size,
     });
     return values;
+  }
+
+  // 처리 중인 요청 목록입니다(snapshot의 inFlight). 시작한 순서(경과 시간이 긴 것부터)로 MAX_IN_FLIGHT개까지 돌려줍니다.
+  // 라우트가 정해진 요청은 라우트 모양(GET /orders/:id), 정해지기 전(라우트 앞 미들웨어)이면 메서드만(GET) 씁니다.
+  inFlightRequests(now = performance.now()): InFlightRequest[] {
+    const list: InFlightRequest[] = [];
+    for (const [req, startedAt] of this.active) {
+      if (list.length >= MAX_IN_FLIGHT) {
+        break;
+      }
+      list.push({
+        route: this.routes.get(req) ?? req.method ?? "?",
+        elapsedMs: Math.max(0, Math.round(now - startedAt)),
+      });
+    }
+    return list;
   }
 
   private track(req: IncomingMessage, res: ServerResponse): void {
@@ -126,12 +150,13 @@ export class HttpCollector {
     }
     this.tracked.add(req);
     const startedAt = performance.now();
-    this.inFlight += 1;
+    this.active.set(req, startedAt);
     this.watchRoute(req);
     // close는 응답을 마쳤을 때도, 그 전에 연결이 끊겼을 때도 옵니다(docs/guides/T07.md '사전 확인').
     res.once("close", () =>
       guard(() =>
         this.finish(
+          req,
           performance.now() - startedAt,
           res.writableFinished,
           res.statusCode,
@@ -140,8 +165,13 @@ export class HttpCollector {
     );
   }
 
-  private finish(durationMs: number, finished: boolean, status: number): void {
-    this.inFlight = Math.max(0, this.inFlight - 1);
+  private finish(
+    req: IncomingMessage,
+    durationMs: number,
+    finished: boolean,
+    status: number,
+  ): void {
+    this.active.delete(req);
     this.total += 1;
     if (!finished) {
       this.aborted += 1;

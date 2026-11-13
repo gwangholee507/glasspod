@@ -390,7 +390,8 @@ export const serverMessageSchema = {
 export const snapshotDataSchema = {
   $schema: "http://json-schema.org/draft-07/schema#",
   title: "SnapshotData",
-  description: "snapshot 요청에 대한 답(response의 data)입니다(design.md 7.3).",
+  description:
+    "snapshot 요청에 대한 답(response의 data)입니다(design.md 7.3). 서버는 validateSnapshotData로 검증합니다.",
   type: "object",
   required: ["state", "inFlight", "process"],
   properties: {
@@ -402,16 +403,20 @@ export const snapshotDataSchema = {
       },
     },
     inFlight: {
-      description: "진행 중인 요청과 경과 시간입니다.",
+      description:
+        "진행 중인 요청과 경과 시간입니다. 시작한 순서(경과 시간이 긴 것부터)로 적습니다.",
       type: "array",
       items: {
         type: "object",
         required: ["route", "elapsedMs"],
         properties: {
           route: {
+            description:
+              "요청의 라우트 모양입니다(예: GET /orders/:id). 라우트가 정해지기 전이면 메서드만 씁니다(예: GET). 실제 경로는 id와 개인 정보가 들어갈 수 있어 쓰지 않습니다.",
             type: "string",
           },
           elapsedMs: {
+            description: "요청이 시작된 뒤 지난 시간(ms)입니다.",
             type: "number",
             minimum: 0,
           },
@@ -424,10 +429,12 @@ export const snapshotDataSchema = {
       required: ["uptimeSec", "heapUsedBytes"],
       properties: {
         uptimeSec: {
+          description: "프로세스가 시작된 뒤 지난 시간(초)입니다.",
           type: "number",
           minimum: 0,
         },
         heapUsedBytes: {
+          description: "JavaScript 힙 사용량(바이트)입니다.",
           type: "integer",
           minimum: 0,
         },

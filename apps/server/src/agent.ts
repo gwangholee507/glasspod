@@ -1,11 +1,14 @@
 // SDK의 WebSocket 연결(/agent)을 받습니다(design.md 7.1).
 // 첫 메시지로 hello를 받아 welcome 또는 reject로 답하고, 그 뒤 메시지는 검증만 합니다.
 // welcome 뒤에는 heartbeat를 주기마다 보내 SDK가 응답 없는 연결을 알아채게 합니다(design.md 7.4).
+// hello를 받아들인 연결은 연결 목록(agents.ts)에 넣고, response는 그 연결에 넘겨 기다리던 요청과 짝짓습니다(T09).
 import type { IncomingMessage, Server } from "node:http";
 import { WebSocketServer } from "ws";
 import type { RawData, WebSocket } from "ws";
 import { parseSdkMessage } from "@glasspod/protocol";
 import type { HelloMessage } from "@glasspod/protocol";
+import { AgentSession } from "./agents.js";
+import type { AgentRegistry } from "./agents.js";
 import type { ServerConfig } from "./config.js";
 import { decideHello, rejectMessage } from "./handshake.js";
 import type { RejectReason } from "./handshake.js";
@@ -26,28 +29,32 @@ const HEARTBEAT_TEXT = JSON.stringify({ type: "heartbeat" });
 export function attachAgentServer(
   server: Server,
   config: ServerConfig,
+  agents: AgentRegistry,
 ): WebSocketServer {
   // path가 다른 업그레이드 요청은 ws가 400으로 거절합니다.
-  const agents = new WebSocketServer({
+  const agentServer = new WebSocketServer({
     server,
     path: AGENT_PATH,
     maxPayload: MAX_MESSAGE_BYTES,
   });
-  agents.on("connection", (socket, request) =>
-    handleConnection(socket, request, config),
+  agentServer.on("connection", (socket, request) =>
+    handleConnection(socket, request, config, agents),
   );
   // http 서버의 오류(예: 포트 사용 중)가 여기로도 전달됩니다. 처리는 index.ts의 서버 오류 처리에서 합니다.
-  agents.on("error", () => {});
-  return agents;
+  agentServer.on("error", () => {});
+  return agentServer;
 }
 
 function handleConnection(
   socket: WebSocket,
   request: IncomingMessage,
   config: ServerConfig,
+  agents: AgentRegistry,
 ): void {
   const remote = request.socket.remoteAddress;
   let hello: HelloMessage | undefined;
+  // hello를 받아들인 뒤의 연결입니다. 연결 목록에 들어가고, 연결이 끝나면 빠집니다.
+  let session: AgentSession | undefined;
   let rejected = false;
   // welcome을 보낸 뒤 heartbeat를 보내는 타이머입니다. 연결이 끝나면 멈춥니다.
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
@@ -108,6 +115,24 @@ function handleConnection(
         sdk: `${hello.sdk.lang}@${hello.sdk.version}`,
         protocol: hello.protocol,
       });
+      session = new AgentSession({
+        hello,
+        fields: fields(),
+        send: (text) => {
+          if (socket.readyState !== socket.OPEN) {
+            return false;
+          }
+          socket.send(text);
+          return true;
+        },
+      });
+      const previous = agents.add(session);
+      if (previous !== undefined) {
+        log.info("agent replaced", {
+          ...fields(),
+          previous: previous.hello.instanceId,
+        });
+      }
       return;
     }
 
@@ -125,7 +150,12 @@ function handleConnection(
       log.warn("message ignored", { ...fields(), detail: "duplicate hello" });
       return;
     }
-    // 보관과 상태 판단은 T11부터 합니다. 지금은 받은 종류만 남깁니다.
+    // 답은 기다리던 요청과 짝짓습니다. 로그는 짝지은 쪽(agents.ts)에서 남깁니다.
+    if (result.message.type === "response") {
+      session?.receive(result.message);
+      return;
+    }
+    // metrics와 event의 보관과 상태 판단은 T11부터 합니다. 지금은 받은 종류만 남깁니다.
     log.info("message received", {
       ...fields(),
       type: result.message.type,
@@ -136,6 +166,10 @@ function handleConnection(
   socket.on("close", (code, reason) => {
     clearTimeout(helloTimer);
     clearInterval(heartbeatTimer);
+    if (session !== undefined) {
+      session.close();
+      agents.remove(session);
+    }
     log.info("agent disconnected", {
       ...fields(),
       code,

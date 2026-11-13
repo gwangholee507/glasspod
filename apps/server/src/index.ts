@@ -1,7 +1,8 @@
-// Glasspod 서버를 시작합니다. HTTP(/health)와 SDK WebSocket(/agent)을 같은 포트에서 받습니다.
+// Glasspod 서버를 시작합니다. HTTP(/health, /api)와 SDK WebSocket(/agent)을 같은 포트에서 받습니다.
 import { createServer } from "node:http";
 import { PROTOCOL_VERSION } from "@glasspod/protocol";
 import { AGENT_PATH, attachAgentServer } from "./agent.js";
+import { AgentRegistry } from "./agents.js";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import type { ServerConfig } from "./config.js";
@@ -22,8 +23,10 @@ try {
   process.exit(1);
 }
 
-const server = createServer(createApp());
-const agents = attachAgentServer(server, config);
+// hello를 받아들인 SDK 연결 목록입니다. HTTP API가 여기서 연결을 찾아 request를 보냅니다.
+const agents = new AgentRegistry();
+const server = createServer(createApp(agents));
+const agentServer = attachAgentServer(server, config, agents);
 
 server.on("error", (error) => {
   log.error("server error", { detail: error.message });
@@ -50,10 +53,10 @@ function shutdown(signal: NodeJS.Signals): void {
   shuttingDown = true;
   log.info("shutting down", { signal });
 
-  for (const client of agents.clients) {
+  for (const client of agentServer.clients) {
     client.close(CLOSE_GOING_AWAY, "server shutting down");
   }
-  agents.close();
+  agentServer.close();
   server.close(() => process.exit(0));
 
   setTimeout(() => {

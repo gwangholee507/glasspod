@@ -2,9 +2,14 @@
 // 스키마는 모르는 필드를 허용합니다. 받는 쪽은 모르는 필드를 무시하면 됩니다.
 import { Ajv } from "ajv";
 import type { AnySchema, ValidateFunction } from "ajv";
-import { sdkMessageSchema, serverMessageSchema } from "./generated/schemas.js";
+import {
+  sdkMessageSchema,
+  serverMessageSchema,
+  snapshotDataSchema,
+} from "./generated/schemas.js";
 import type { SdkMessage } from "./generated/sdk-message.js";
 import type { ServerMessage } from "./generated/server-message.js";
+import type { SnapshotData } from "./generated/snapshot.js";
 
 // 검증 결과입니다. 실패하면 error에 이유를 한 줄로 담습니다(예: "message/pod must have required property 'name'").
 export type ParseResult<T> =
@@ -26,6 +31,7 @@ function lazyValidator<T>(schema: AnySchema): () => ValidateFunction<T> {
 const sdkMessageValidator = lazyValidator<SdkMessage>(sdkMessageSchema);
 const serverMessageValidator =
   lazyValidator<ServerMessage>(serverMessageSchema);
+const snapshotDataValidator = lazyValidator<SnapshotData>(snapshotDataSchema);
 
 function parseWith<T>(
   text: string,
@@ -61,4 +67,19 @@ export function parseSdkMessage(text: string): ParseResult<SdkMessage> {
 // SDK가 서버에서 받은 메시지(welcome, reject, request, heartbeat)를 읽습니다.
 export function parseServerMessage(text: string): ParseResult<ServerMessage> {
   return parseWith(text, serverMessageValidator);
+}
+
+// 서버가 snapshot response의 data를 검증합니다(T09). data는 response를 읽을 때 이미 JSON에서 꺼낸 값입니다.
+// 오류 문구는 "data"로 시작합니다(예: "data must have required property 'process'").
+export function validateSnapshotData(
+  value: unknown,
+): ParseResult<SnapshotData> {
+  const validate = snapshotDataValidator();
+  if (validate(value)) {
+    return { ok: true, message: value };
+  }
+  return {
+    ok: false,
+    error: getAjv().errorsText(validate.errors, { dataVar: "data" }),
+  };
 }
