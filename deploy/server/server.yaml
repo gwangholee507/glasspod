@@ -1,0 +1,93 @@
+# Glasspod 서버입니다(docs/guides/T16.md, 서버 코드는 apps/server).
+# 이미지는 루트에서 npm run server:image로 만든 glasspod-server:dev를 그대로 씁니다(D3, 레지스트리에 올리지 않음).
+# 이미지를 다시 만들면 kubectl -n glasspod rollout restart deployment/glasspod-server로 새 Pod를 띄웁니다.
+# 노트북에서 API를 부를 때는 kubectl -n glasspod port-forward service/glasspod-server 8080:8080입니다(D4).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: glasspod-server
+  namespace: glasspod
+  labels:
+    app: glasspod-server
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glasspod-server
+  namespace: glasspod
+  labels:
+    app: glasspod-server
+spec:
+  # 서버는 SDK 연결과 기록을 메모리에 들고 있습니다(D1). 둘이 뜨면 SDK 연결이 나뉘므로 하나만 둡니다.
+  replicas: 1
+  # 새 Pod를 띄우기 전에 예전 Pod를 먼저 끝냅니다. 롤링 업데이트는 잠깐 서버가 둘이 됩니다.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: glasspod-server
+  template:
+    metadata:
+      labels:
+        app: glasspod-server
+    spec:
+      # 이 ServiceAccount의 토큰으로 쿠버네티스 API를 부릅니다. 권한은 rbac-*.yaml의 Role입니다.
+      # GLASSPOD_KUBE_CONTEXT가 없고 KUBERNETES_SERVICE_HOST가 있으면 서버가 이 토큰을 씁니다(docs/guides/T12.md 결정 4).
+      serviceAccountName: glasspod-server
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: server
+          image: glasspod-server:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            # HTTP(/health, /api)와 SDK WebSocket(/agent)을 함께 받습니다. GLASSPOD_PORT의 기본값(8080)과 같습니다.
+            - name: http
+              containerPort: 8080
+          env:
+            # watch할 namespace입니다. 여기에 더한 namespace마다 rbac-<namespace>.yaml의 Role도 있어야 합니다.
+            - name: GLASSPOD_NAMESPACES
+              value: glasspod-demo
+          # readiness만 둡니다. 서버는 기록을 메모리에 들고 있어 재시작하면 사라지므로 쿠버네티스가 재시작하지 않게 합니다
+          # (2026-11-14 사용자 결정). 준비되기 전에는 Service가 SDK 연결을 보내지 않습니다.
+          # 서버는 포트를 열기까지 약 1초 걸립니다(client-node 불러오기). 그 전에 묻지 않게 2초 기다려
+          # 시작할 때마다 'Readiness probe failed' 경고가 남지 않게 합니다.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 1
+            failureThreshold: 2
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            # CPU 한도는 두지 않습니다. 데모 앱과 같습니다.
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            # 서버는 파일을 쓰지 않습니다.
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: glasspod-server
+  namespace: glasspod
+  labels:
+    app: glasspod-server
+spec:
+  selector:
+    app: glasspod-server
+  ports:
+    # 데모 앱의 GLASSPOD_SERVER(ws://glasspod-server.glasspod.svc.cluster.local:8080/agent)가 이 포트입니다.
+    - name: http
+      port: 8080
+      targetPort: http

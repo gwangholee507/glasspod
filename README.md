@@ -86,7 +86,8 @@ glasspod.state('app.mode', 'ready');                    // 상태 등록, 바뀌
 - Node.js SDK 끊김 처리: 서버에 붙기 전이나 끊긴 동안의 event를 500개까지 들고 있다가 다시 붙으면 일어난 시각 그대로 보냄. 측정은 끊긴 동안에도 이어 가고, `heartbeat`가 끊기면 응답 없는 연결로 보고 다시 붙음
 - snapshot: `GET /api/pods/:namespace/:name/snapshot`으로 Pod 하나의 지금 상태(상태 값, 처리 중인 요청과 경과 시간, 프로세스 정보)를 그 Pod의 SDK에 물어봄. 5초 안에 답이 없으면 응답 없음(504)으로 알려 앱이 막혔는지 보여 줌
 - 데모 앱: SDK를 넣은 주문 앱 흉내(`examples/demo-app`)와 부하 스크립트. 관리 포트의 HTTP API로 느려짐, 이벤트 루프 막힘, 예외 폭주, 크래시, 메모리 증가를 일부러 일으킴. `npm run dev:server`, `npm run demo`, `npm run demo:load`로 노트북에서 띄워 볼 수 있음
-- 데모 앱 배포: 데모 앱 이미지(`npm run demo:image`)와 로컬 클러스터용 매니페스트(`deploy/demo/`). `kubectl apply -f deploy/demo/`로 `glasspod-demo` namespace에 데모 앱 Pod 3개, Service, 부하 Pod를 띄움. SDK는 Pod 이름과 namespace를 Downward API로 받고, 고장 스위치는 `kubectl port-forward`로 씀. 서버를 클러스터에 띄우기 전까지는 노트북에서 띄운 서버에 붙여 확인함
+- 데모 앱 배포: 데모 앱 이미지(`npm run demo:image`)와 로컬 클러스터용 매니페스트(`deploy/demo/`). `kubectl apply -f deploy/demo/`로 `glasspod-demo` namespace에 데모 앱 Pod 3개, Service, 부하 Pod를 띄움. SDK는 Pod 이름과 namespace를 Downward API로 받고, 고장 스위치는 `kubectl port-forward`로 씀
+- 서버 배포: 서버 이미지(`npm run server:image`)와 매니페스트(`deploy/server/`). `kubectl apply -f deploy/server/`로 `glasspod` namespace에 서버를 띄우면 데모 앱 Pod의 SDK가 클러스터 안 주소로 붙음. 서버는 자기 ServiceAccount로 쿠버네티스를 보고, 권한은 감시 대상 namespace에 한정된 Role(지금은 읽기만)로 줌. 노트북에서는 `kubectl port-forward`로 서버 API에 닿음
 - 쿠버네티스 watch: 서버가 정한 namespace의 Pod, Deployment, ReplicaSet, 클러스터 이벤트를 받아 Pod마다 지금 상태(실행 단계, 준비, 재시작 횟수, OOMKilled 같은 마지막 종료 이유)를 들고 있음. 노트북에서는 `GLASSPOD_KUBE_CONTEXT=docker-desktop npm run dev:server`처럼 볼 클러스터의 context를 정해 줌
 - 웹 화면 뼈대: React + Vite, React Router, Tailwind CSS. 공통 틀(로고와 메뉴), 목록 자리, Pod 상세 자리(`/pods/:namespace/:name`)에서 snapshot을 불러 원본 JSON과 오류를 보여 줌. `npm run dev:web`으로 띄우면 개발 서버가 `/api` 요청을 Glasspod 서버로 넘김
 

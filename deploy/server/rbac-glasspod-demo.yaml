@@ -1,0 +1,38 @@
+# 서버가 glasspod-demo namespace를 볼 수 있게 하는 권한입니다(docs/guides/T16.md).
+# 권한은 이 namespace에 한정된 Role로만 줍니다. ClusterRole은 쓰지 않습니다(design.md 9장).
+# 지금은 관찰 권한(watch에 쓰는 list, watch와 get)만 있습니다. 조치 권한은 그 조치를 만드는 작업(T21~T24)에서 더합니다.
+#
+# Role과 RoleBinding은 glasspod-demo에 만들어지므로 deploy/demo/를 먼저 apply해야 합니다.
+# 다른 namespace도 보려면 이 파일을 복사해 namespace만 바꾸고, server.yaml의 GLASSPOD_NAMESPACES에도 더합니다.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: glasspod-server
+  namespace: glasspod-demo
+  labels:
+    app: glasspod-server
+rules:
+  # 쿠버네티스 watch(docs/guides/T12.md)가 namespace마다 보는 자원 네 개입니다. events는 core/v1입니다.
+  - apiGroups: [""]
+    resources: ["pods", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: glasspod-server
+  namespace: glasspod-demo
+  labels:
+    app: glasspod-server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: glasspod-server
+subjects:
+  # deploy/server/server.yaml의 ServiceAccount입니다.
+  - kind: ServiceAccount
+    name: glasspod-server
+    namespace: glasspod

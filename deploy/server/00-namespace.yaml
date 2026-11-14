@@ -1,0 +1,12 @@
+# Glasspod 서버 namespace입니다(docs/guides/T16.md).
+# kubectl apply -f deploy/server/는 파일 이름 순서로 적용하므로, 이 파일이 맨 앞에 오게 이름을 00-으로 시작합니다.
+# 서버는 쿠버네티스 권한을 가지므로 Pod Security Standards의 restricted를 강제합니다.
+# 이 namespace의 Pod가 루트 실행, 권한 상승, 추가 capability 같은 설정을 쓰면 만들어지지 않습니다.
+# 지울 때 이 파일까지 함께 지우면 namespace가 통째로 지워집니다. 서버만 지울 때는 server.yaml만 지정합니다.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: glasspod
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.34

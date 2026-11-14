@@ -69,6 +69,7 @@ Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 �
 | 쿠버네티스 watch | 서버가 `@kubernetes/client-node`의 informer로 namespace마다 Pod, Deployment, ReplicaSet, 클러스터 이벤트를 watch하고, 지금 있는 Pod·Deployment·ReplicaSet의 요약(실행 단계, 준비, 재시작 횟수, 마지막 종료 이유, Pod IP 등)을 메모리에 들고 있음. 볼 namespace는 `GLASSPOD_NAMESPACES`(기본 `glasspod-demo`). 클러스터 밖에서는 `GLASSPOD_KUBE_CONTEXT`로 정한 kubeconfig context만 쓰고(current-context는 따라가지 않음), 없으면 클러스터 안 ServiceAccount, 둘 다 없으면 watch를 끔. 클러스터에 닿지 않으면 경고를 남기고 1초부터 30초까지 늘려 가며 다시 시도. 읽기만 함(list, watch). 자세한 내용은 `docs/guides/T12.md` | 확정 (2026-11-14) |
 | 데모 앱 | 주문 앱 흉내(`examples/demo-app`): 주문 조회·접수 API, 큐와 작업자, 가짜 DB. 관리 포트(기본 `127.0.0.1:3001`)의 HTTP API로 느려짐, 이벤트 루프 막힘, 예외 폭주, 크래시, 메모리 증가를 켜고 끔. 고장은 SDK로 알리지 않음. 부하는 같은 워크스페이스의 부하 스크립트로 만듦(요청마다 새 연결). 자세한 내용은 `docs/guides/T10.md` | 확정 (2026-11-13) |
 | 데모 앱 배포 | 다단계 빌드로 JS만 담은 이미지 `glasspod-demo-app:dev`(베이스 `node:22.22.0-bookworm-slim`, digest 고정)를 `npm run demo:image`로 만듦. 매니페스트는 평범한 YAML(`deploy/demo/`): `glasspod-demo` namespace에 데모 앱 Deployment(Pod 3개, readiness probe만, 메모리 한도 256Mi와 힙 한도 512MB로 메모리 증가가 OOMKilled로 끝남)와 Service, 같은 이미지의 부하 Deployment. `GLASSPOD_SERVER`는 클러스터 안 서버 주소(8장)이고, 노트북에서 띄운 서버에 붙일 때는 `kubectl set env`로 `ws://host.docker.internal:8080/agent`로 잠시 바꿈. 고장 스위치는 `kubectl port-forward`로 씀. 자세한 내용은 `docs/guides/T15.md` | 확정 (2026-11-14) |
+| 서버 배포 | 데모 앱과 같은 다단계 빌드로 이미지 `glasspod-server:dev`(`npm run server:image`)를 만듦. 매니페스트는 평범한 YAML(`deploy/server/`): `glasspod` namespace(Pod Security Standards `restricted` 강제)에 ServiceAccount, Deployment(Pod 1개, `Recreate`, readiness probe만, 읽기 전용 파일 시스템), Service(`glasspod-server:8080`). 권한은 감시 대상 namespace마다 둔 Role과 RoleBinding(`rbac-<namespace>.yaml`)이고 지금은 관찰 권한(pods·events·deployments·replicasets의 get·list·watch)만. 조치 권한은 그 조치를 만들 때 더함. 노트북에서는 `kubectl port-forward`로 API에 닿음. 자세한 내용은 `docs/guides/T16.md` | 확정 (2026-11-14) |
 | SDK 끊김 처리 (Node) | 연결이 없는 동안(첫 연결 전 포함) event를 500개까지 들고 있다가 다시 연결되면 원래 `ts`로, 1분 한도 안에서 보냄. ack는 없고 `seq`는 보낸 순서. 측정은 연결과 상관없이 이어 가고 `welcome` 직후 metrics를 바로 보냄. 서버가 `heartbeat`를 보내고, SDK는 3주기 동안 서버 메시지가 없으면 다시 붙음(7.4). 자세한 내용은 `docs/guides/T08.md` | 확정 (2026-11-12) |
 | 웹 화면 | React + Vite | 확정 (2026-11-05) |
 | 웹 뼈대 | 라우팅은 React Router 7(선언형 모드), 서버 API는 내장 `fetch`를 감싼 클라이언트로 부르고 실패는 서버의 오류 본문 `{ error, detail }` 모양으로 다룸, 스타일은 Tailwind CSS 4(브랜드 색·글꼴은 `@theme` 한곳). 브라우저는 같은 출처의 `/api`만 부르고, 개발 서버(Vite)가 그것을 Glasspod 서버로 넘김(`GLASSPOD_WEB_PROXY_TARGET`). 서버와 웹이 함께 쓰는 HTTP API 본문 타입은 `@glasspod/protocol`의 `http.ts`(손으로 쓴 타입). 자세한 내용은 `docs/guides/T17.md` | 확정 (2026-11-14) |
@@ -385,7 +386,7 @@ glasspod.stop();                                        // 연결을 닫음. 이
 ## 9. 보안
 
 - **가짜 데이터 막기**: 자동 규칙은 SDK가 보낸 값을 근거로 쿠버네티스를 움직이므로, Pod인 척 접속해 가짜 값을 넣을 수 있으면 안 됩니다.
-  - v1: `hello`의 Pod 이름으로 쿠버네티스에서 Pod IP를 조회해 실제 접속 IP와 대조합니다.
+  - v1: `hello`의 Pod 이름으로 쿠버네티스에서 Pod IP를 조회해 실제 접속 IP와 대조합니다. 로컬 클러스터에서 클러스터 안 서버가 보는 접속 주소는 `::ffff:10.1.0.25`처럼 `::ffff:` 접두어가 붙은 그 Pod의 IP입니다(2026-11-14, T16). 노트북에서 띄운 서버에 붙으면 `127.0.0.1`이라 대조할 수 없습니다(T15).
   - 이후: SDK가 ServiceAccount 토큰을 보내고 서버가 TokenReview API로 검증합니다.
 - **SDK로 가는 요청은 읽기 전용**: 서버를 통해 앱 상태를 바꾸는 통로를 만들지 않습니다.
 - **서버 권한 최소화**: RBAC로 5.4의 권한만 줍니다. 개발 중에는 조치 대상 namespace를 제한합니다.
@@ -395,7 +396,6 @@ glasspod.stop();                                        // 연결을 닫음. 이
 
 | 항목 | 현재 상황과 제안 |
 | --- | --- |
-| 접속 IP 대조 | 로컬 클러스터에서 서버가 보는 접속 IP가 Pod IP와 같은지 구현할 때 확인. 노트북에서 띄운 서버에 Pod가 붙으면 접속 IP가 `127.0.0.1`(Docker Desktop이 넘겨줌)이라, 클러스터 안 서버(T16)로 확인해야 함(2026-11-14, T15) |
 | 규칙 문법 | M1 점검(T26)이 끝난 뒤 정함(2026-11-14) |
 
 ## 11. 이후 확장
