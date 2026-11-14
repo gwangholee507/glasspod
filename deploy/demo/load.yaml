@@ -1,0 +1,40 @@
+# 데모 앱에 계속 요청을 보내는 부하 스크립트입니다(docs/guides/T15.md, examples/demo-app/src/load.ts).
+# 데모 앱과 같은 이미지에서 명령만 바꿔 띄웁니다. SDK는 쓰지 않습니다.
+# 멈출 때는 kubectl -n glasspod-demo scale deployment/demo-load --replicas=0입니다.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-load
+  namespace: glasspod-demo
+  labels:
+    app: demo-load
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-load
+  template:
+    metadata:
+      labels:
+        app: demo-load
+    spec:
+      containers:
+        - name: demo-load
+          image: glasspod-demo-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["node", "dist/load.js"]
+          env:
+            # 데모 앱 Service입니다. 요청마다 새 연결이라 Service 뒤의 Pod에 고르게 나뉩니다(T10 결정 19).
+            - name: LOAD_TARGET
+              value: http://demo-app:3000
+            - name: LOAD_RPS
+              value: "10"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false

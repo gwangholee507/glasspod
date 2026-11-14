@@ -98,6 +98,15 @@ function main(): void {
     }
   }).start();
   setInterval(report, REPORT_INTERVAL_MS);
+
+  // 컨테이너에서는 node가 PID 1이라, 처리기가 없는 SIGTERM은 무시되고 유예 시간이 지나야 끝납니다(docs/guides/T15.md).
+  // 기다리는 요청은 버리고 바로 끝냅니다.
+  const onSignal = (signal: NodeJS.Signals): void => {
+    log.info("load stopped", { signal, inFlight });
+    process.exit(0);
+  };
+  process.once("SIGTERM", onSignal);
+  process.once("SIGINT", onSignal);
 }
 
 main();

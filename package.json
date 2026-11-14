@@ -24,7 +24,8 @@
     "dev:web": "npm run dev -w @glasspod/web",
     "build:web": "npm run build -w @glasspod/web",
     "demo": "npm run start -w @glasspod/demo-app",
-    "demo:load": "npm run load -w @glasspod/demo-app"
+    "demo:load": "npm run load -w @glasspod/demo-app",
+    "demo:image": "docker build -f examples/demo-app/Dockerfile -t glasspod-demo-app:dev ."
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.3.3",

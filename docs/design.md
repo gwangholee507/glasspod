@@ -54,7 +54,7 @@ Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 �
 | 데이터 전달 | push. SDK가 연 연결 하나로 양방향 통신 | 확정 (2026-11-05) |
 | SDK 언어 | Node.js로 먼저 만듦 | 확정 (2026-11-05) |
 | 테스트 클러스터 | 지금 있는 로컬 환경 | 확정 (2026-11-05) |
-| 로컬 클러스터 구성 | Docker Desktop 내장 Kubernetes를 kubeadm 방식(노드 1개, context `docker-desktop`)으로 켬. Docker Desktop은 지금 버전(4.59.1, containerd 이미지 저장소)을 그대로 씀. 직접 빌드한 이미지는 `docker build`로 만든 것을 `imagePullPolicy: IfNotPresent`로 그대로 쓰고, 클러스터가 그 이미지를 찾지 못하면 로컬 레지스트리(`localhost:5001`, 5000번은 macOS AirPlay가 씀)에 올려 받게 함. 그대로 쓸 수 있는지는 T15에서 확인(10장) | 확정 (2026-11-14) |
+| 로컬 클러스터 구성 | Docker Desktop 내장 Kubernetes를 kubeadm 방식(노드 1개, context `docker-desktop`)으로 켬. Docker Desktop은 지금 버전(4.59.1, containerd 이미지 저장소)을 그대로 씀. 직접 빌드한 이미지는 `docker build`로 만든 것을 `imagePullPolicy: IfNotPresent`로 그대로 쓰고, 클러스터가 그 이미지를 찾지 못하면 로컬 레지스트리(`localhost:5001`, 5000번은 macOS AirPlay가 씀)에 올려 받게 함. T15에서 그대로 쓰는 것을 확인함(kubelet이 Docker 엔진을 써서 이미지 저장소가 같음). 레지스트리는 만들지 않음 | 확정 (2026-11-14) |
 | 연결 방식 | WebSocket, 메시지는 JSON | 초안 |
 | 메시지 형식 | 7장의 프로토콜 v1 | 초안 |
 | 스키마와 타입 | JSON Schema(draft-07) 파일이 기준. json-schema-to-typescript로 TypeScript 타입을 만들고(생성한 파일은 커밋), Ajv로 검증. 자세한 내용은 `docs/guides/T02.md` | 확정 (2026-11-08) |
@@ -68,6 +68,7 @@ Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 �
 | snapshot | 서버의 HTTP `GET /api/pods/:namespace/:name/snapshot`이 그 Pod의 SDK에 `request`를 보내고 5초까지 기다려 JSON으로 돌려줌(답이 없으면 504). SDK는 `hello`의 `capabilities`에 `snapshot`을 넣고, 상태 값·처리 중인 요청·프로세스 정보로 바로 답함. 연결마다 기다리는 요청 5개까지. 서버는 결과를 보관하지 않음. 자세한 내용은 `docs/guides/T09.md` | 확정 (2026-11-13) |
 | 쿠버네티스 watch | 서버가 `@kubernetes/client-node`의 informer로 namespace마다 Pod, Deployment, ReplicaSet, 클러스터 이벤트를 watch하고, 지금 있는 Pod·Deployment·ReplicaSet의 요약(실행 단계, 준비, 재시작 횟수, 마지막 종료 이유, Pod IP 등)을 메모리에 들고 있음. 볼 namespace는 `GLASSPOD_NAMESPACES`(기본 `glasspod-demo`). 클러스터 밖에서는 `GLASSPOD_KUBE_CONTEXT`로 정한 kubeconfig context만 쓰고(current-context는 따라가지 않음), 없으면 클러스터 안 ServiceAccount, 둘 다 없으면 watch를 끔. 클러스터에 닿지 않으면 경고를 남기고 1초부터 30초까지 늘려 가며 다시 시도. 읽기만 함(list, watch). 자세한 내용은 `docs/guides/T12.md` | 확정 (2026-11-14) |
 | 데모 앱 | 주문 앱 흉내(`examples/demo-app`): 주문 조회·접수 API, 큐와 작업자, 가짜 DB. 관리 포트(기본 `127.0.0.1:3001`)의 HTTP API로 느려짐, 이벤트 루프 막힘, 예외 폭주, 크래시, 메모리 증가를 켜고 끔. 고장은 SDK로 알리지 않음. 부하는 같은 워크스페이스의 부하 스크립트로 만듦(요청마다 새 연결). 자세한 내용은 `docs/guides/T10.md` | 확정 (2026-11-13) |
+| 데모 앱 배포 | 다단계 빌드로 JS만 담은 이미지 `glasspod-demo-app:dev`(베이스 `node:22.22.0-bookworm-slim`, digest 고정)를 `npm run demo:image`로 만듦. 매니페스트는 평범한 YAML(`deploy/demo/`): `glasspod-demo` namespace에 데모 앱 Deployment(Pod 3개, readiness probe만, 메모리 한도 256Mi와 힙 한도 512MB로 메모리 증가가 OOMKilled로 끝남)와 Service, 같은 이미지의 부하 Deployment. `GLASSPOD_SERVER`는 클러스터 안 서버 주소(8장)이고, 노트북에서 띄운 서버에 붙일 때는 `kubectl set env`로 `ws://host.docker.internal:8080/agent`로 잠시 바꿈. 고장 스위치는 `kubectl port-forward`로 씀. 자세한 내용은 `docs/guides/T15.md` | 확정 (2026-11-14) |
 | SDK 끊김 처리 (Node) | 연결이 없는 동안(첫 연결 전 포함) event를 500개까지 들고 있다가 다시 연결되면 원래 `ts`로, 1분 한도 안에서 보냄. ack는 없고 `seq`는 보낸 순서. 측정은 연결과 상관없이 이어 가고 `welcome` 직후 metrics를 바로 보냄. 서버가 `heartbeat`를 보내고, SDK는 3주기 동안 서버 메시지가 없으면 다시 붙음(7.4). 자세한 내용은 `docs/guides/T08.md` | 확정 (2026-11-12) |
 | 웹 화면 | React + Vite | 확정 (2026-11-05) |
 | 웹 뼈대 | 라우팅은 React Router 7(선언형 모드), 서버 API는 내장 `fetch`를 감싼 클라이언트로 부르고 실패는 서버의 오류 본문 `{ error, detail }` 모양으로 다룸, 스타일은 Tailwind CSS 4(브랜드 색·글꼴은 `@theme` 한곳). 브라우저는 같은 출처의 `/api`만 부르고, 개발 서버(Vite)가 그것을 Glasspod 서버로 넘김(`GLASSPOD_WEB_PROXY_TARGET`). 서버와 웹이 함께 쓰는 HTTP API 본문 타입은 `@glasspod/protocol`의 `http.ts`(손으로 쓴 타입). 자세한 내용은 `docs/guides/T17.md` | 확정 (2026-11-14) |
@@ -363,6 +364,8 @@ env:
 
 세 값 가운데 하나라도 없거나 `GLASSPOD_SERVER`가 `ws://`·`wss://` 주소가 아니면 SDK는 경고 한 줄을 남기고 꺼지며, 앱은 그대로 동작합니다.
 
+데모 앱의 매니페스트(`deploy/demo/demo-app.yaml`)가 이 설정을 쓰는 예입니다(2026-11-14, `docs/guides/T15.md`).
+
 앱 코드에서 SDK를 쓰는 모습입니다. `start()`와 `stop()`은 T04, `gauge()`와 `counter()`는 T05, `exception()`, `state()`, `event()`는 T06, `express()`와 `expressErrors()`는 T07에서 만들었습니다.
 
 ```js
@@ -392,8 +395,7 @@ glasspod.stop();                                        // 연결을 닫음. 이
 
 | 항목 | 현재 상황과 제안 |
 | --- | --- |
-| 로컬 이미지 공유 | kubeadm 클러스터가 `docker build`로 만든 이미지를 그대로 쓰는지 T15에서 확인. Docker 공식 문서에 설명이 없고 사용자 보고가 엇갈림(2026-11-14 확인). 2026-11-14에 켠 클러스터는 노드의 컨테이너 런타임이 `docker://29.2.0`(kubelet이 Docker 엔진을 씀)이라 그대로 쓸 가능성이 큼. 안 되면 로컬 레지스트리(3장 '로컬 클러스터 구성') |
-| 접속 IP 대조 | 로컬 클러스터에서 서버가 보는 접속 IP가 Pod IP와 같은지 구현할 때 확인 |
+| 접속 IP 대조 | 로컬 클러스터에서 서버가 보는 접속 IP가 Pod IP와 같은지 구현할 때 확인. 노트북에서 띄운 서버에 Pod가 붙으면 접속 IP가 `127.0.0.1`(Docker Desktop이 넘겨줌)이라, 클러스터 안 서버(T16)로 확인해야 함(2026-11-14, T15) |
 | 규칙 문법 | M1 점검(T26)이 끝난 뒤 정함(2026-11-14) |
 
 ## 11. 이후 확장

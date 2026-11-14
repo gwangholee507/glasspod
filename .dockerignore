@@ -1,0 +1,28 @@
+# docker build의 맥락(저장소 루트)에서 뺄 파일입니다(docs/guides/T15.md).
+# Dockerfile은 필요한 파일만 골라 COPY하지만, 맥락에 들어가는 것 자체를 줄이고 로컬 전용 파일이 빌드에 섞이지 않게 합니다.
+
+# 의존성과 빌드 결과는 이미지 안에서 다시 만듭니다.
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+coverage
+
+# 로컬 전용 파일과 비밀 값
+CLAUDE.md
+CLAUDE.local.md
+TODO.md
+.claude
+.env
+.env.*
+*.kubeconfig
+kubeconfig
+
+# 이미지에 필요 없는 것
+.git
+docs
+deploy
+exports
+*.log
+*.heapsnapshot
+*.cpuprofile
+.DS_Store

@@ -1,0 +1,7 @@
+# 데모 앱 namespace입니다(docs/guides/T15.md).
+# kubectl apply -f deploy/demo/는 파일 이름 순서로 적용하므로, 이 파일이 맨 앞에 오게 이름을 00-으로 시작합니다.
+# 지울 때 이 파일까지 함께 지우면 namespace가 통째로 지워집니다. 앱만 지울 때는 demo-app.yaml, load.yaml만 지정합니다.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: glasspod-demo

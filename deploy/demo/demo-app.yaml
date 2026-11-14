@@ -1,0 +1,81 @@
+# Glasspod 데모 앱입니다(docs/guides/T15.md, 앱 코드는 examples/demo-app).
+# 이미지는 루트에서 npm run demo:image로 만든 glasspod-demo-app:dev를 그대로 씁니다(D3, 레지스트리에 올리지 않음).
+# 이미지를 다시 만들면 kubectl -n glasspod-demo rollout restart deployment/demo-app으로 새 Pod를 띄웁니다.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-app
+  namespace: glasspod-demo
+  labels:
+    app: demo-app
+spec:
+  # 여러 개여야 '한 Pod만 이상함'(design.md 6장)과 격리(T23)를 볼 수 있습니다.
+  replicas: 3
+  selector:
+    matchLabels:
+      app: demo-app
+  template:
+    metadata:
+      labels:
+        # Service selector와 ReplicaSet selector가 함께 쓰는 라벨입니다. 격리(T23)는 이 라벨을 바꿉니다.
+        app: demo-app
+    spec:
+      containers:
+        - name: demo-app
+          image: glasspod-demo-app:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            # 관리 포트(3001, 고장 스위치)는 127.0.0.1에만 열려 여기에 적지 않습니다. kubectl port-forward로 씁니다.
+            - name: http
+              containerPort: 3000
+          env:
+            # 클러스터 안의 Glasspod 서버(T16)입니다. 노트북에서 띄운 서버에 붙일 때는 kubectl set env로 잠시 바꿉니다.
+            - name: GLASSPOD_SERVER
+              value: ws://glasspod-server.glasspod.svc.cluster.local:8080/agent
+            # SDK가 자기 Pod를 알리는 값입니다(Downward API, design.md 8장).
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # 힙 한도를 메모리 한도(256Mi)보다 크게 둡니다. 메모리 증가(leak)가 V8 heap out of memory가 아니라
+            # 컨테이너 OOMKilled로 끝나게 하려는 것입니다(T10 결정 15). 두지 않으면 Node 기본값이 약 259MiB입니다.
+            - name: NODE_OPTIONS
+              value: --max-old-space-size=512
+          # readiness만 둡니다. 막힘이 길어도 쿠버네티스는 재시작하지 않고 트래픽에서만 뺍니다(2026-11-14 사용자 결정).
+          # /healthz는 glasspod.express() 앞에 있어 http.* 지표에 들어가지 않습니다(T10 결정 7).
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 1
+            failureThreshold: 2
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            # CPU 한도는 두지 않습니다. CPU를 조이면 이벤트 루프 지연 지표가 앱 문제와 섞입니다.
+            limits:
+              memory: 256Mi
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-app
+  namespace: glasspod-demo
+  labels:
+    app: demo-app
+spec:
+  selector:
+    app: demo-app
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
