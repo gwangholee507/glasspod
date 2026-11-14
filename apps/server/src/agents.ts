@@ -8,6 +8,7 @@ import type {
 } from "@glasspod/protocol";
 import { log } from "./log.js";
 import type { LogFields } from "./log.js";
+import { podKey } from "./pod-key.js";
 import { PendingRequests } from "./requests.js";
 import type { RequestOutcome } from "./requests.js";
 
@@ -122,9 +123,4 @@ export class AgentRegistry {
   get(pod: PodRef): AgentSession | undefined {
     return this.sessions.get(podKey(pod));
   }
-}
-
-// namespace와 이름을 이어 붙이면 '/'가 든 값끼리 겹칠 수 있으므로 JSON 배열로 만듭니다.
-function podKey(pod: PodRef): string {
-  return JSON.stringify([pod.namespace, pod.name]);
 }

@@ -1,5 +1,5 @@
 // 쿠버네티스에서 받은 Pod·Deployment·ReplicaSet을 요약해 지금 상태로 들고 있습니다(docs/guides/T12.md '요약').
-// 지워진 것은 바로 빼고, 이력은 들고 있지 않습니다(T11).
+// 지워진 것은 바로 빼고, 이력은 들고 있지 않습니다. 지워진 Pod의 마지막 요약은 저장소가 30분 남깁니다(T11).
 import type {
   V1Deployment,
   V1ObjectMeta,

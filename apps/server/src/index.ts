@@ -11,10 +11,16 @@ import type { ServerConfig } from "./config.js";
 import { chooseKubeSource, loadKubeConfig } from "./kube.js";
 import type { KubeConnection, KubeSource } from "./kube.js";
 import { log } from "./log.js";
+import { AppStates } from "./pods.js";
+import { MemoryStore } from "./store/memory.js";
+import type { Store, StoreKind } from "./store/store.js";
 import { ClusterWatcher } from "./watch.js";
 
 // 종료 신호를 받은 뒤 이 시간 안에 정리가 끝나지 않으면 강제로 끝냅니다.
 const SHUTDOWN_TIMEOUT_MS = 5_000;
+// 30분 지난 기록을 지우는 주기와, 보관 현황을 로그에 남기는 주기입니다(docs/guides/T11.md).
+const PRUNE_INTERVAL_MS = 60_000;
+const STATS_INTERVAL_MS = 5 * 60_000;
 // 서버가 내려갈 때 SDK 연결을 닫는 WebSocket 종료 코드입니다(1001: going away).
 const CLOSE_GOING_AWAY = 1001;
 
@@ -35,16 +41,31 @@ try {
   process.exit(1);
 }
 
+function createStore(kind: StoreKind): Store {
+  switch (kind) {
+    case "memory":
+      return new MemoryStore();
+  }
+}
+
 // hello를 받아들인 SDK 연결 목록입니다. HTTP API가 여기서 연결을 찾아 request를 보냅니다.
 const agents = new AgentRegistry();
+// SDK에서 받은 기록(지표·event·연결)과 지워진 Pod를 30분 들고 있는 저장소입니다.
+const store = createStore(config.store);
+// SDK 쪽 Pod별 지금 상태입니다. 받은 메시지를 기록으로 바꿔 저장소에 넣습니다. T13 상태 판단이 읽습니다.
+const apps = new AppStates(store);
 // 쿠버네티스 watch가 채우는 지금 상태입니다. T13 상태 판단과 T14 조회 API가 읽습니다.
 const cluster = new ClusterState();
 const watcher =
   kube === undefined
     ? undefined
-    : new ClusterWatcher(kube, config.namespaces, cluster);
+    : new ClusterWatcher(kube, config.namespaces, cluster, (pod) =>
+        apps.podDeleted(pod),
+      );
 const server = createServer(createApp(agents));
-const agentServer = attachAgentServer(server, config, agents);
+const agentServer = attachAgentServer(server, config, agents, apps);
+const pruneTimer = setInterval(() => void apps.prune(), PRUNE_INTERVAL_MS);
+const statsTimer = setInterval(() => void apps.logStats(), STATS_INTERVAL_MS);
 
 server.on("error", (error) => {
   log.error("server error", { detail: error.message });
@@ -59,6 +80,7 @@ server.listen(config.port, () => {
     metricsIntervalMs: config.metricsIntervalMs,
     maxEventsPerMinute: config.maxEventsPerMinute,
     heartbeatIntervalMs: config.heartbeatIntervalMs,
+    store: store.kind,
   });
   // 서버 시작을 기다리게 하지 않습니다. 클러스터에 닿지 않으면 watch가 스스로 다시 시도합니다.
   if (watcher === undefined) {
@@ -80,11 +102,15 @@ function shutdown(signal: NodeJS.Signals): void {
   log.info("shutting down", { signal });
 
   void watcher?.stop();
+  clearInterval(pruneTimer);
+  clearInterval(statsTimer);
   for (const client of agentServer.clients) {
     client.close(CLOSE_GOING_AWAY, "server shutting down");
   }
   agentServer.close();
-  server.close(() => process.exit(0));
+  server.close(() => {
+    void store.close().finally(() => process.exit(0));
+  });
 
   setTimeout(() => {
     log.warn("shutdown timed out, exiting", { timeoutMs: SHUTDOWN_TIMEOUT_MS });

@@ -1,4 +1,7 @@
 // 서버 설정입니다. 환경에 따라 달라지는 값은 환경변수로 받고, 없으면 design.md의 값을 씁니다.
+import { STORE_KINDS } from "./store/store.js";
+import type { StoreKind } from "./store/store.js";
+
 export interface ServerConfig {
   // HTTP(/health)와 SDK WebSocket(/agent)을 함께 받는 포트입니다.
   port: number;
@@ -11,6 +14,8 @@ export interface ServerConfig {
   namespaces: string[];
   // 클러스터 밖에서 쓸 kubeconfig context입니다. 없으면 클러스터 안에서만 watch합니다.
   kubeContext: string | undefined;
+  // 기록을 둘 저장소입니다(docs/guides/T11.md). 지금은 memory뿐입니다.
+  store: StoreKind;
 }
 
 // 쿠버네티스 namespace 이름 규칙(DNS-1123 label)입니다.
@@ -71,6 +76,26 @@ function readOptionalText(env: Env, name: string): string | undefined {
   return value === undefined || value === "" ? undefined : value;
 }
 
+// 정해진 값 가운데 하나를 읽습니다. 없으면 기본값, 목록에 없는 값이면 시작하지 않습니다.
+function readChoice<T extends string>(
+  env: Env,
+  name: string,
+  choices: readonly T[],
+  fallback: T,
+): T {
+  const value = readOptionalText(env, name);
+  if (value === undefined) {
+    return fallback;
+  }
+  const choice = choices.find((candidate) => candidate === value);
+  if (choice === undefined) {
+    throw new Error(
+      `${name} must be one of: ${choices.join(", ")} (got "${value}")`,
+    );
+  }
+  return choice;
+}
+
 export function loadConfig(env: Env): ServerConfig {
   return {
     port: readInteger(env, "GLASSPOD_PORT", 8080, 1, 65535),
@@ -100,5 +125,6 @@ export function loadConfig(env: Env): ServerConfig {
     ),
     namespaces: readNamespaces(env, "GLASSPOD_NAMESPACES", "glasspod-demo"),
     kubeContext: readOptionalText(env, "GLASSPOD_KUBE_CONTEXT"),
+    store: readChoice(env, "GLASSPOD_STORE", STORE_KINDS, "memory"),
   };
 }

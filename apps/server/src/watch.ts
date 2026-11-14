@@ -237,10 +237,12 @@ export class ClusterWatcher {
   // namespace마다 시작 순서대로 든 watch입니다.
   private readonly resources: Startable[][] = [];
 
+  // onPodDeleted는 Pod가 지워질 때 마지막 요약으로 부릅니다. 저장소가 30분 남깁니다(T11).
   constructor(
     private readonly connection: KubeConnection,
     private readonly namespaces: readonly string[],
     private readonly state: ClusterState,
+    onPodDeleted: (pod: PodSummary) => void = () => {},
   ) {
     const core = connection.config.makeApiClient(CoreV1Api);
     const apps = connection.config.makeApiClient(AppsV1Api);
@@ -328,11 +330,13 @@ export class ClusterWatcher {
             );
             if (removed !== undefined) {
               log.info("pod deleted", { pod: `${namespace}/${removed.name}` });
+              // 삭제 알림에 온 객체가 마지막 모습입니다.
+              onPodDeleted(summarizePod(object));
             }
           },
         },
       );
-      // 이벤트는 들고 있지 않습니다(T11). 처음 list는 synced 로그의 개수로만 남깁니다.
+      // 이벤트는 들고 있지 않습니다(T11 결정 3, 보관은 T19). 처음 list는 synced 로그의 개수로만 남깁니다.
       const events = new WatchedResource<CoreV1Event>(
         connection,
         "events",
