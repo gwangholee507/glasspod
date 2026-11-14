@@ -86,10 +86,10 @@ glasspod.state('app.mode', 'ready');                    // 상태 등록, 바뀌
 - Node.js SDK 끊김 처리: 서버에 붙기 전이나 끊긴 동안의 event를 500개까지 들고 있다가 다시 붙으면 일어난 시각 그대로 보냄. 측정은 끊긴 동안에도 이어 가고, `heartbeat`가 끊기면 응답 없는 연결로 보고 다시 붙음
 - snapshot: `GET /api/pods/:namespace/:name/snapshot`으로 Pod 하나의 지금 상태(상태 값, 처리 중인 요청과 경과 시간, 프로세스 정보)를 그 Pod의 SDK에 물어봄. 5초 안에 답이 없으면 응답 없음(504)으로 알려 앱이 막혔는지 보여 줌
 - 데모 앱: SDK를 넣은 주문 앱 흉내(`examples/demo-app`)와 부하 스크립트. 관리 포트의 HTTP API로 느려짐, 이벤트 루프 막힘, 예외 폭주, 크래시, 메모리 증가를 일부러 일으킴. `npm run dev:server`, `npm run demo`, `npm run demo:load`로 노트북에서 띄워 볼 수 있음
-
+- 쿠버네티스 watch: 서버가 정한 namespace의 Pod, Deployment, ReplicaSet, 클러스터 이벤트를 받아 Pod마다 지금 상태(실행 단계, 준비, 재시작 횟수, OOMKilled 같은 마지막 종료 이유)를 들고 있음. 노트북에서는 `GLASSPOD_KUBE_CONTEXT=docker-desktop npm run dev:server`처럼 볼 클러스터의 context를 정해 줌
 - 웹 화면 뼈대: React + Vite, React Router, Tailwind CSS. 공통 틀(로고와 메뉴), 목록 자리, Pod 상세 자리(`/pods/:namespace/:name`)에서 snapshot을 불러 원본 JSON과 오류를 보여 줌. `npm run dev:web`으로 띄우면 개발 서버가 `/api` 요청을 Glasspod 서버로 넘김
 
-Pod 목록과 상세 화면은 아직 자리만 있고, 서버는 받은 데이터를 아직 보관하지 않습니다.
+Pod 목록과 상세 화면은 아직 자리만 있고, 서버는 SDK가 보낸 데이터를 아직 보관하지 않습니다. 쿠버네티스에서 받은 상태는 서버 로그로만 볼 수 있습니다.
 
 첫 마일스톤은 [대표 시나리오](docs/design.md#6-대표-시나리오-pod-하나가-느려질-때)를 로컬 클러스터에서 처음부터 끝까지 돌려 보는 것입니다. 느려진 Pod 하나를 화면에서 찾고, 트래픽에서 뺀 채로 원인을 확인한 뒤 삭제합니다.
 
@@ -99,7 +99,7 @@ Pod 목록과 상세 화면은 아직 자리만 있고, 서버는 받은 데이�
 | [docs/guides/](docs/guides/) | 작업별 지침서: 범위와 완료 기준 |
 | [docs/logs/](docs/logs/) | 일자별 작업 기록 |
 
-기술 스택: Node.js 22, TypeScript, Vitest, npm workspaces, JSON Schema(Ajv), Express + `ws`, React + Vite, React Router, Tailwind CSS
+기술 스택: Node.js 22, TypeScript, Vitest, npm workspaces, JSON Schema(Ajv), Express + `ws`, `@kubernetes/client-node`, React + Vite, React Router, Tailwind CSS
 
 ## 라이선스
 

@@ -7,7 +7,15 @@ export interface ServerConfig {
   maxEventsPerMinute: number;
   // welcome 뒤 SDK에 heartbeat를 보내는 주기(ms)입니다. welcome으로도 알립니다(design.md 7.4).
   heartbeatIntervalMs: number;
+  // 쿠버네티스에서 watch할 namespace입니다. 같은 이름은 한 번만 들어 있습니다(docs/guides/T12.md).
+  namespaces: string[];
+  // 클러스터 밖에서 쓸 kubeconfig context입니다. 없으면 클러스터 안에서만 watch합니다.
+  kubeContext: string | undefined;
 }
+
+// 쿠버네티스 namespace 이름 규칙(DNS-1123 label)입니다.
+const NAMESPACE_PATTERN = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
+const MAX_NAMESPACE_LENGTH = 63;
 
 // Node 타이머가 받는 가장 긴 간격입니다. 넘으면 Node가 1ms로 바꿔 버립니다.
 const MAX_TIMER_MS = 2_147_483_647;
@@ -33,6 +41,34 @@ function readInteger(
     );
   }
   return value;
+}
+
+// 쉼표로 나눈 namespace 목록을 읽습니다. 빈 항목이나 규칙에 맞지 않는 이름이 있으면 시작하지 않습니다.
+function readNamespaces(env: Env, name: string, fallback: string): string[] {
+  const raw = env[name];
+  const text = raw === undefined || raw.trim() === "" ? fallback : raw;
+  const namespaces: string[] = [];
+  for (const part of text.split(",")) {
+    const namespace = part.trim();
+    if (
+      namespace.length > MAX_NAMESPACE_LENGTH ||
+      !NAMESPACE_PATTERN.test(namespace)
+    ) {
+      throw new Error(
+        `${name} must be a comma-separated list of namespace names (got "${raw}")`,
+      );
+    }
+    if (!namespaces.includes(namespace)) {
+      namespaces.push(namespace);
+    }
+  }
+  return namespaces;
+}
+
+// 값이 없거나 공백뿐이면 undefined입니다.
+function readOptionalText(env: Env, name: string): string | undefined {
+  const value = env[name]?.trim();
+  return value === undefined || value === "" ? undefined : value;
 }
 
 export function loadConfig(env: Env): ServerConfig {
@@ -62,5 +98,7 @@ export function loadConfig(env: Env): ServerConfig {
       1000,
       MAX_TIMER_MS,
     ),
+    namespaces: readNamespaces(env, "GLASSPOD_NAMESPACES", "glasspod-demo"),
+    kubeContext: readOptionalText(env, "GLASSPOD_KUBE_CONTEXT"),
   };
 }

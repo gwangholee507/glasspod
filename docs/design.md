@@ -53,7 +53,8 @@ Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 �
 | 조치 실행 | 기본은 개발자가 화면에서 버튼을 누름. 규칙을 정해 두면 자동 실행 | 확정 (2026-11-05) |
 | 데이터 전달 | push. SDK가 연 연결 하나로 양방향 통신 | 확정 (2026-11-05) |
 | SDK 언어 | Node.js로 먼저 만듦 | 확정 (2026-11-05) |
-| 테스트 클러스터 | 지금 있는 로컬 환경 | 확정 (2026-11-05). 구성 방식은 10장 |
+| 테스트 클러스터 | 지금 있는 로컬 환경 | 확정 (2026-11-05) |
+| 로컬 클러스터 구성 | Docker Desktop 내장 Kubernetes를 kubeadm 방식(노드 1개, context `docker-desktop`)으로 켬. Docker Desktop은 지금 버전(4.59.1, containerd 이미지 저장소)을 그대로 씀. 직접 빌드한 이미지는 `docker build`로 만든 것을 `imagePullPolicy: IfNotPresent`로 그대로 쓰고, 클러스터가 그 이미지를 찾지 못하면 로컬 레지스트리(`localhost:5001`, 5000번은 macOS AirPlay가 씀)에 올려 받게 함. 그대로 쓸 수 있는지는 T15에서 확인(10장) | 확정 (2026-11-14) |
 | 연결 방식 | WebSocket, 메시지는 JSON | 초안 |
 | 메시지 형식 | 7장의 프로토콜 v1 | 초안 |
 | 스키마와 타입 | JSON Schema(draft-07) 파일이 기준. json-schema-to-typescript로 TypeScript 타입을 만들고(생성한 파일은 커밋), Ajv로 검증. 자세한 내용은 `docs/guides/T02.md` | 확정 (2026-11-08) |
@@ -65,13 +66,19 @@ Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 �
 | SDK event (Node) | 공개 API는 `exception(error, data?)`, `state(name, value)`, `event(name, options?)`. 같은 이벤트는 첫 건을 바로 보내고 그 뒤 10초씩 묶어 `count`로 보냄. 처리되지 않은 예외는 `uncaughtExceptionMonitor`에서 바로 보내고 기다리지 않음. 자세한 내용은 `docs/guides/T06.md` | 확정 (2026-11-10) |
 | SDK HTTP (Node) | Express 미들웨어 `express()`가 `http.*` 7개(요청 수, 5xx, 끊긴 요청, 응답 시간 p50·p99·max, 처리 중인 요청 수)를 모아 metrics에 넣음. 오류 미들웨어 `expressErrors()`가 Express가 잡은 예외를 `route`와 함께 보냄. SDK는 Express에 의존하지 않음. 자세한 내용은 `docs/guides/T07.md` | 확정 (2026-11-12) |
 | snapshot | 서버의 HTTP `GET /api/pods/:namespace/:name/snapshot`이 그 Pod의 SDK에 `request`를 보내고 5초까지 기다려 JSON으로 돌려줌(답이 없으면 504). SDK는 `hello`의 `capabilities`에 `snapshot`을 넣고, 상태 값·처리 중인 요청·프로세스 정보로 바로 답함. 연결마다 기다리는 요청 5개까지. 서버는 결과를 보관하지 않음. 자세한 내용은 `docs/guides/T09.md` | 확정 (2026-11-13) |
+| 쿠버네티스 watch | 서버가 `@kubernetes/client-node`의 informer로 namespace마다 Pod, Deployment, ReplicaSet, 클러스터 이벤트를 watch하고, 지금 있는 Pod·Deployment·ReplicaSet의 요약(실행 단계, 준비, 재시작 횟수, 마지막 종료 이유, Pod IP 등)을 메모리에 들고 있음. 볼 namespace는 `GLASSPOD_NAMESPACES`(기본 `glasspod-demo`). 클러스터 밖에서는 `GLASSPOD_KUBE_CONTEXT`로 정한 kubeconfig context만 쓰고(current-context는 따라가지 않음), 없으면 클러스터 안 ServiceAccount, 둘 다 없으면 watch를 끔. 클러스터에 닿지 않으면 경고를 남기고 1초부터 30초까지 늘려 가며 다시 시도. 읽기만 함(list, watch). 자세한 내용은 `docs/guides/T12.md` | 확정 (2026-11-14) |
 | 데모 앱 | 주문 앱 흉내(`examples/demo-app`): 주문 조회·접수 API, 큐와 작업자, 가짜 DB. 관리 포트(기본 `127.0.0.1:3001`)의 HTTP API로 느려짐, 이벤트 루프 막힘, 예외 폭주, 크래시, 메모리 증가를 켜고 끔. 고장은 SDK로 알리지 않음. 부하는 같은 워크스페이스의 부하 스크립트로 만듦(요청마다 새 연결). 자세한 내용은 `docs/guides/T10.md` | 확정 (2026-11-13) |
 | SDK 끊김 처리 (Node) | 연결이 없는 동안(첫 연결 전 포함) event를 500개까지 들고 있다가 다시 연결되면 원래 `ts`로, 1분 한도 안에서 보냄. ack는 없고 `seq`는 보낸 순서. 측정은 연결과 상관없이 이어 가고 `welcome` 직후 metrics를 바로 보냄. 서버가 `heartbeat`를 보내고, SDK는 3주기 동안 서버 메시지가 없으면 다시 붙음(7.4). 자세한 내용은 `docs/guides/T08.md` | 확정 (2026-11-12) |
 | 웹 화면 | React + Vite | 확정 (2026-11-05) |
 | 웹 뼈대 | 라우팅은 React Router 7(선언형 모드), 서버 API는 내장 `fetch`를 감싼 클라이언트로 부르고 실패는 서버의 오류 본문 `{ error, detail }` 모양으로 다룸, 스타일은 Tailwind CSS 4(브랜드 색·글꼴은 `@theme` 한곳). 브라우저는 같은 출처의 `/api`만 부르고, 개발 서버(Vite)가 그것을 Glasspod 서버로 넘김(`GLASSPOD_WEB_PROXY_TARGET`). 서버와 웹이 함께 쓰는 HTTP API 본문 타입은 `@glasspod/protocol`의 `http.ts`(손으로 쓴 타입). 자세한 내용은 `docs/guides/T17.md` | 확정 (2026-11-14) |
 | 저장소 구성 | npm workspaces 모노레포, ESM만 사용. 패키지 이름은 `@glasspod/protocol`, `@glasspod/sdk`, `@glasspod/server`, `@glasspod/web`, `@glasspod/demo-app`. 자세한 내용은 `docs/guides/T01.md` | 확정 (2026-11-05) |
 | 1차 범위 | 2장의 핵심 기능. 자동 규칙은 확장 기능 | 확정 (2026-11-05) |
-| 서버 데이터 보관 | 10장 | 미정 |
+| 서버 데이터 보관 | 저장소 어댑터를 두고 운영자가 환경변수로 메모리와 DB 중에 고름(기본은 메모리). 어댑터 인터페이스는 DB도 붙일 수 있게 비동기로 만듦. 1차 범위는 인터페이스와 메모리 어댑터만: Pod별 최근 30분, 지워진 Pod의 기록도 30분 동안 남김, 조치 기록도 저장소에 둠, 서버가 다시 시작되면 사라짐. DB 어댑터는 PostgreSQL(드라이버 `pg`)이고 M1(T26) 뒤의 확장 작업(11장) | 확정 (2026-11-14) |
+| 웹 화면 실시간 갱신 | SSE(Server-Sent Events). 서버 → 브라우저 한 방향이고 브라우저는 `EventSource`로 받음. 조치는 일반 HTTP 요청으로 보냄 | 확정 (2026-11-14) |
+| 웹 화면 제공과 접속 | 서버가 웹 화면 빌드 결과(`apps/web/dist`)도 함께 제공해 화면과 API가 같은 출처. 로컬에서는 `kubectl port-forward`로 접속. kubectl 권한이 있는 사람만 열 수 있으므로 1차 범위에서는 로그인을 만들지 않음 | 확정 (2026-11-14) |
+| 상세 화면 그래프 | uPlot. 버전은 T19에서 2주 규칙으로 고름 | 확정 (2026-11-14) |
+| 다크 모드 | 1차 범위는 밝은 화면만. 다크 모드 색은 확장 작업에서 정함(11장, 12장) | 확정 (2026-11-14) |
+| 자동 규칙 문법 | M1 점검(T26)이 끝난 뒤 정함. 규칙의 조건이 T13의 상태 판단과 실제로 쓰는 지표 이름에 기대기 때문 | 미정. 정할 시점만 정함 (2026-11-14) |
 
 ## 4. 전체 구성
 
@@ -119,6 +126,7 @@ SDK가 앱을 망치면 안 됩니다. 다음을 지킵니다.
   - Kubernetes API watch: Pod 상태(Running, 재시작 횟수, OOMKilled 같은 종료 이유), Deployment의 replica 수, 클러스터 이벤트
 - Pod(namespace + 이름)를 키로 둘을 합쳐 Pod 하나의 그림을 만듭니다. 예: "Pod A: Running, 재시작 3회, 큐 길이 1,200, 마지막 예외는 DB timeout"
 - 클러스터 안에 Deployment로 띄우고, 자기 ServiceAccount로 API를 호출합니다. 권한은 RBAC로 필요한 만큼만 줍니다(5.4).
+- 볼 namespace는 환경변수로 정하고 namespace마다 watch합니다. 그래서 관찰 권한도 namespace에 한정된 Role로 줄 수 있습니다. 클러스터 밖에서 개발할 때는 kubeconfig context를 이름으로 정해야 watch하고, kubeconfig의 current-context는 따라가지 않습니다. context를 바꿨을 때 다른 클러스터를 보거나 거기에 조치하지 않게 하기 위해서입니다(2026-11-14, `docs/guides/T12.md`).
 - SDK 신호와 Pod 상태를 함께 보고 상태를 판단합니다(7.5).
 
 ### 5.3 웹 화면
@@ -337,6 +345,8 @@ SDK (앱 안)                         서버
 | 연결 끊김 | 종료 중이거나 없음 | 정상 종료 |
 | 새 `instanceId`로 `hello` | Running, 재시작 횟수 증가 | 컨테이너 재시작. 직전 이벤트를 원인 후보로 표시 |
 
+snapshot 요청이 응답 없음(504)으로 끝난 것은 판단에 쓰지 않고 상세 화면에만 보여 줍니다. snapshot은 개발자가 상세 화면을 열 때만 요청하므로 주기적인 신호가 아닙니다(2026-11-14).
+
 ## 8. 앱 배포 설정
 
 감시 대상 앱의 Deployment에 환경변수 세 개를 넣습니다. Pod 정보는 Downward API로 받습니다.
@@ -382,19 +392,17 @@ glasspod.stop();                                        // 연결을 닫음. 이
 
 | 항목 | 현재 상황과 제안 |
 | --- | --- |
-| 서버 데이터 보관 | 제안: 서버 메모리에 Pod별 최근 30분. 오래 보관해야 할 필요가 생기면 DB 추가 |
-| 웹 화면 접속 방식 | 제안: 서버가 웹 화면 파일도 함께 제공하고, 로컬에서는 `kubectl port-forward`로 접속 |
-| 웹 화면 실시간 갱신 | 서버 → 브라우저 한 방향. 제안: SSE(Server-Sent Events). 한 방향이면 충분함 |
-| 로컬 클러스터 구성 | 2026-11-05 확인: Docker Desktop 4.59.1 설치됨(데몬 꺼져 있음), kubectl 1.34.1, kubeconfig 없음(내장 Kubernetes가 켜진 적 없음). Kubernetes를 켜는 방식과 직접 빌드한 이미지를 클러스터에 넣는 방법을 정해야 함 |
+| 로컬 이미지 공유 | kubeadm 클러스터가 `docker build`로 만든 이미지를 그대로 쓰는지 T15에서 확인. Docker 공식 문서에 설명이 없고 사용자 보고가 엇갈림(2026-11-14 확인). 2026-11-14에 켠 클러스터는 노드의 컨테이너 런타임이 `docker://29.2.0`(kubelet이 Docker 엔진을 씀)이라 그대로 쓸 가능성이 큼. 안 되면 로컬 레지스트리(3장 '로컬 클러스터 구성') |
 | 접속 IP 대조 | 로컬 클러스터에서 서버가 보는 접속 IP가 Pod IP와 같은지 구현할 때 확인 |
-| 규칙 문법 | 미정 |
+| 규칙 문법 | M1 점검(T26)이 끝난 뒤 정함(2026-11-14) |
 
 ## 11. 이후 확장
 
 - Spring Boot SDK: 스레드 덤프(`threadDump` 요청), 데드락 감지, 스레드 풀·커넥션 풀 사용량
 - ServiceAccount 토큰으로 SDK 신원 확인
 - 히스토그램 지표
-- 장기 보관용 DB
+- PostgreSQL 저장소 어댑터: 서버 기록을 DB에 남김(3장 '서버 데이터 보관')
+- 다크 모드: 색을 정하고 웹 화면에 적용(12장)
 - 지표 메시지 줄이기: 이름과 `kind`를 `hello`에서 한 번만 알리기
 
 ## 12. 브랜드
@@ -435,7 +443,7 @@ glasspod.stop();                                        // 연결을 닫음. 이
 | Paper | `#F7FBFC` | 페이지 배경 |
 | Coral | `#FF7A59` | 경고, 이상한 Pod 강조 |
 
-다크 모드 색은 아직 정하지 않았습니다. 웹 화면 작업 때 정합니다.
+1차 범위는 밝은 화면만 만듭니다. 다크 모드 색은 확장 작업에서 정합니다(2026-11-14).
 
 ### 글꼴
 
@@ -444,6 +452,8 @@ glasspod.stop();                                        // 연결을 닫음. 이
 | 글자 로고 | Manrope |
 | 화면 본문 (한글, 영문) | Pretendard |
 | 지표 숫자, 코드 | JetBrains Mono |
+
+글꼴 파일은 npm 패키지로 웹 화면 번들에 넣고 CDN은 쓰지 않습니다. 클러스터 안에서 인터넷 없이도 보이고 외부로 요청이 나가지 않습니다. Pretendard는 화면에 쓰인 글자만 받는 판(dynamic subset)을 씁니다(2026-11-14, 적용은 T18).
 
 ### 이름 사용 가능 여부 (2026-11-05 확인)
 
