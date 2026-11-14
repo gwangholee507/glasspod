@@ -142,6 +142,7 @@ function handleConnection(
           socket.send(text);
           return true;
         },
+        close: (code, reason) => socket.close(code, reason),
       });
       const previous = agents.add(session);
       if (previous !== undefined) {

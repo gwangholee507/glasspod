@@ -17,12 +17,14 @@ function hello(fields: Partial<HelloMessage> = {}): HelloMessage {
   };
 }
 
-// 보낸 텍스트 프레임을 모으는 연결입니다. open이 false면 보내지 못합니다.
+// 보낸 텍스트 프레임과 닫기 요청을 모으는 연결입니다. open이 false면 보내지 못합니다.
 function session(options: { hello?: HelloMessage; open?: boolean } = {}): {
   session: AgentSession;
   sent: unknown[];
+  closed: { code: number; reason: string }[];
 } {
   const sent: unknown[] = [];
+  const closed: { code: number; reason: string }[] = [];
   const created = new AgentSession({
     hello: options.hello ?? hello(),
     fields: { pod: "shop/orders-1" },
@@ -33,8 +35,9 @@ function session(options: { hello?: HelloMessage; open?: boolean } = {}): {
       sent.push(JSON.parse(text));
       return true;
     },
+    close: (code, reason) => closed.push({ code, reason }),
   });
-  return { session: created, sent };
+  return { session: created, sent, closed };
 }
 
 function answer(replyTo: string): ResponseMessage {
@@ -120,6 +123,25 @@ describe("AgentRegistry", () => {
     expect(agents.get({ namespace: "shop", name: "orders-1" })).toBe(newer);
     agents.remove(newer);
     expect(agents.get({ namespace: "shop", name: "orders-1" })).toBeUndefined();
+  });
+
+  it("closes and forgets the current connection of a deleted pod", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const agents = new AgentRegistry();
+    const pod = { namespace: "shop", name: "orders-1" };
+    const { session: current, closed } = session();
+    agents.add(current);
+
+    expect(agents.disconnect(pod, "pod deleted")).toBe(current);
+    expect(closed).toEqual([{ code: 1000, reason: "pod deleted" }]);
+    expect(agents.get(pod)).toBeUndefined();
+    expect(String(vi.mocked(console.log).mock.calls[0]?.[0])).toContain(
+      "pod connection closed",
+    );
+    // 연결이 없으면 아무것도 하지 않습니다.
+    expect(agents.disconnect(pod, "pod deleted")).toBeUndefined();
+    expect(closed).toHaveLength(1);
+    vi.restoreAllMocks();
   });
 
   it("does not mix up pods whose names contain a slash", () => {

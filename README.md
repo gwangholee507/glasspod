@@ -90,9 +90,10 @@ glasspod.state('app.mode', 'ready');                    // 상태 등록, 바뀌
 - 서버 배포: 서버 이미지(`npm run server:image`)와 매니페스트(`deploy/server/`). `kubectl apply -f deploy/server/`로 `glasspod` namespace에 서버를 띄우면 데모 앱 Pod의 SDK가 클러스터 안 주소로 붙음. 서버는 자기 ServiceAccount로 쿠버네티스를 보고, 권한은 감시 대상 namespace에 한정된 Role(지금은 읽기만)로 줌. 노트북에서는 `kubectl port-forward`로 서버 API에 닿음
 - 쿠버네티스 watch: 서버가 정한 namespace의 Pod, Deployment, ReplicaSet, 클러스터 이벤트를 받아 Pod마다 지금 상태(실행 단계, 준비, 재시작 횟수, OOMKilled 같은 마지막 종료 이유)를 들고 있음. 노트북에서는 `GLASSPOD_KUBE_CONTEXT=docker-desktop npm run dev:server`처럼 볼 클러스터의 context를 정해 줌
 - 서버 기록 보관: SDK가 보낸 metrics와 event, 연결 기록, 지워진 Pod의 마지막 모습을 Pod별로 최근 30분 들고 있음(지금은 메모리, `GLASSPOD_STORE=memory`). 빠진 메시지(`seq` 빈틈)와 counter 리셋(앱 재시작)을 알아내고, 5분마다 보관 현황을 로그에 남김
+- 상태 판단: 서버가 1초마다 Pod마다 SDK 신호와 쿠버네티스 상태를 합쳐 정상, 앱 멈춤 의심(연결은 열렸는데 metrics가 끊김), 연결 끊김, 재시작, Pod 이상(CrashLoopBackOff·이미지 오류), 준비 안 됨, 시작 중, SDK 없음, 종료됨 가운데 하나로 판단함. 재시작이면 OOMKilled 같은 종료 이유와 재시작 전 프로세스가 마지막으로 보낸 예외를 원인 후보로 찾음. 지워진 Pod의 남은 SDK 연결은 서버가 닫음
 - 웹 화면 뼈대: React + Vite, React Router, Tailwind CSS. 공통 틀(로고와 메뉴), 목록 자리, Pod 상세 자리(`/pods/:namespace/:name`)에서 snapshot을 불러 원본 JSON과 오류를 보여 줌. `npm run dev:web`으로 띄우면 개발 서버가 `/api` 요청을 Glasspod 서버로 넘김
 
-Pod 목록과 상세 화면은 아직 자리만 있습니다. 서버가 들고 있는 기록과 쿠버네티스 상태를 웹 화면으로 내보내는 조회 API와, 둘을 합친 상태 판단은 다음 작업입니다. 지금은 서버 로그로만 볼 수 있습니다.
+Pod 목록과 상세 화면은 아직 자리만 있습니다. 서버가 들고 있는 기록, 쿠버네티스 상태, 상태 판단을 웹 화면으로 내보내는 조회 API는 다음 작업입니다. 지금은 서버 로그로만 볼 수 있습니다.
 
 첫 마일스톤은 [대표 시나리오](docs/design.md#6-대표-시나리오-pod-하나가-느려질-때)를 로컬 클러스터에서 처음부터 끝까지 돌려 보는 것입니다. 느려진 Pod 하나를 화면에서 찾고, 트래픽에서 뺀 채로 원인을 확인한 뒤 삭제합니다.
 

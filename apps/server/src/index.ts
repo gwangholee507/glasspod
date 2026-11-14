@@ -1,5 +1,5 @@
 // Glasspod 서버를 시작합니다. HTTP(/health, /api)와 SDK WebSocket(/agent)을 같은 포트에서 받습니다.
-// 쿠버네티스 watch는 그 뒤에서 시작합니다(docs/guides/T12.md).
+// 쿠버네티스 watch는 그 뒤에서 시작합니다(docs/guides/T12.md). Pod 상태 판단은 1초마다 합니다(docs/guides/T13.md).
 import { createServer } from "node:http";
 import { PROTOCOL_VERSION } from "@glasspod/protocol";
 import { AGENT_PATH, attachAgentServer } from "./agent.js";
@@ -12,6 +12,7 @@ import { chooseKubeSource, loadKubeConfig } from "./kube.js";
 import type { KubeConnection, KubeSource } from "./kube.js";
 import { log } from "./log.js";
 import { AppStates } from "./pods.js";
+import { STATUS_INTERVAL_MS, StatusMonitor } from "./status-monitor.js";
 import { MemoryStore } from "./store/memory.js";
 import type { Store, StoreKind } from "./store/store.js";
 import { ClusterWatcher } from "./watch.js";
@@ -56,16 +57,34 @@ const store = createStore(config.store);
 const apps = new AppStates(store);
 // 쿠버네티스 watch가 채우는 지금 상태입니다. T13 상태 판단과 T14 조회 API가 읽습니다.
 const cluster = new ClusterState();
+// SDK 상태와 쿠버네티스 상태를 합친 Pod별 판단입니다. T14 조회 API와 SSE가 읽습니다.
+const statuses = new StatusMonitor({
+  apps,
+  cluster,
+  store,
+  metricsIntervalMs: config.metricsIntervalMs,
+});
+// Pod가 지워지면 마지막 요약을 남기고, 그 Pod의 SDK 연결이 남아 있으면 닫습니다(docs/guides/T13.md 결정 4).
 const watcher =
   kube === undefined
     ? undefined
-    : new ClusterWatcher(kube, config.namespaces, cluster, (pod) =>
-        apps.podDeleted(pod),
-      );
+    : new ClusterWatcher(kube, config.namespaces, cluster, (pod) => {
+        apps.podDeleted(pod);
+        agents.disconnect(pod, "pod deleted");
+      });
 const server = createServer(createApp(agents));
 const agentServer = attachAgentServer(server, config, agents, apps);
 const pruneTimer = setInterval(() => void apps.prune(), PRUNE_INTERVAL_MS);
 const statsTimer = setInterval(() => void apps.logStats(), STATS_INTERVAL_MS);
+const statusTimer = setInterval(() => {
+  try {
+    statuses.evaluate();
+  } catch (error) {
+    log.error("pod status failed", {
+      detail: error instanceof Error ? error.message : String(error),
+    });
+  }
+}, STATUS_INTERVAL_MS);
 
 server.on("error", (error) => {
   log.error("server error", { detail: error.message });
@@ -104,6 +123,7 @@ function shutdown(signal: NodeJS.Signals): void {
   void watcher?.stop();
   clearInterval(pruneTimer);
   clearInterval(statsTimer);
+  clearInterval(statusTimer);
   for (const client of agentServer.clients) {
     client.close(CLOSE_GOING_AWAY, "server shutting down");
   }

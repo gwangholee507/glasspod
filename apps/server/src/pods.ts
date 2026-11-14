@@ -41,6 +41,12 @@ export interface AppState {
   readonly instanceId: string;
   readonly sdk: string;
   readonly app: HelloMessage["app"];
+  // 이 instance가 처음 붙은 시각(서버 시계)과, 그 전에 이 Pod에서 본 instance입니다.
+  // 직전 instance가 있으면 프로세스가 다시 시작된 것입니다(design.md 7.5 재시작, docs/guides/T13.md).
+  readonly instanceSince: number;
+  readonly previousInstanceId: string | undefined;
+  // 쿠버네티스에서 이 Pod가 지워진 시각입니다. 상태 판단은 이 Pod가 쿠버네티스에 다시 없을 때 '종료됨'으로 봅니다.
+  readonly deletedAt: number | undefined;
   // 그 연결이 열려 있는지와 시각(서버 시계)입니다.
   readonly connected: boolean;
   readonly connectedAt: number;
@@ -60,6 +66,9 @@ interface TrackedState {
   instanceId: string;
   sdk: string;
   app: HelloMessage["app"];
+  instanceSince: number;
+  previousInstanceId: string | undefined;
+  deletedAt: number | undefined;
   connected: boolean;
   connectedAt: number;
   disconnectedAt: number | undefined;
@@ -100,6 +109,9 @@ export class AppStates {
         instanceId: hello.instanceId,
         sdk: "",
         app: undefined,
+        instanceSince: at,
+        previousInstanceId: undefined,
+        deletedAt: undefined,
         connected: true,
         connectedAt: at,
         disconnectedAt: undefined,
@@ -122,7 +134,9 @@ export class AppStates {
         previous: previous.instanceId,
       });
       state = previous;
+      state.previousInstanceId = previous.instanceId;
       state.instanceId = hello.instanceId;
+      state.instanceSince = at;
       state.lastSeq = hello.seq;
       state.missed = 0;
       state.values.clear();
@@ -204,12 +218,18 @@ export class AppStates {
   }
 
   // 쿠버네티스에서 Pod가 지워졌습니다. 마지막 요약을 30분 남깁니다(ClusterState는 바로 뺌).
+  // 지금 상태가 있으면 지워진 시각을 적어 상태 판단(T13)이 '종료됨'으로 보게 합니다.
   podDeleted(summary: PodSummary): void {
+    const at = this.now();
     const pod = { namespace: summary.namespace, name: summary.name };
+    const state = this.states.get(podKey(pod));
+    if (state !== undefined) {
+      state.deletedAt = at;
+    }
     this.write(
       "deletedPods",
       pod,
-      this.store.addDeletedPod({ pod: summary, deletedAt: this.now() }),
+      this.store.addDeletedPod({ pod: summary, deletedAt: at }),
     );
   }
 

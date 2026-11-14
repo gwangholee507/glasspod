@@ -23,6 +23,21 @@ export interface SnapshotErrorBody extends ApiErrorBody {
   error: SnapshotErrorCode;
 }
 
+// 서버가 Pod마다 내리는 판단입니다(design.md 7.5, docs/guides/T13.md '판단 표'). 한 Pod에 여럿이 맞으면 앞쪽이 먼저입니다.
+export type PodStatus =
+  | "terminated"
+  | "pod-failing"
+  | "stalled"
+  | "disconnected"
+  | "restarted"
+  | "not-ready"
+  | "starting"
+  | "no-sdk"
+  | "ok";
+
+// 판단마다 정해진 강조 수준입니다. 화면은 warning과 critical을 강조합니다.
+export type PodSeverity = "none" | "warning" | "critical";
+
 // snapshot을 받았을 때의 본문입니다. ts는 SDK가 답을 보낸 시각(SDK 시계), elapsedMs는 서버가 보낸 때부터 받을 때까지입니다.
 export interface SnapshotBody {
   pod: PodRef;

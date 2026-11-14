@@ -91,6 +91,7 @@ describe("requestSnapshot", () => {
           sent.push(text);
           return true;
         },
+        close: () => {},
       }),
     );
     const reply = await requestSnapshot(agents, hello.pod);

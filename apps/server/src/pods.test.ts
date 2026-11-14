@@ -98,6 +98,9 @@ describe("AppStates", () => {
       instanceId: "a",
       sdk: "node@0.1.0",
       app: { name: "orders" },
+      instanceSince: 10_000,
+      previousInstanceId: undefined,
+      deletedAt: undefined,
       connected: true,
       connectedAt: 10_000,
       lastMessageAt: 15_000,
@@ -141,6 +144,28 @@ describe("AppStates", () => {
       seq: 1,
       ts: 1_001,
       receivedAt: 15_000,
+    });
+  });
+
+  it("remembers when the instance started and the previous instance", () => {
+    const { apps, clock } = setup();
+    const first = connection("a");
+    apps.connect(first);
+    apps.disconnect(first, 1006);
+    // 같은 instance가 다시 붙으면 시작 시각과 직전 instance는 그대로입니다.
+    clock.now = 12_000;
+    apps.connect(connection("a", 1));
+    expect(apps.get(POD)).toMatchObject({
+      instanceSince: 10_000,
+      previousInstanceId: undefined,
+    });
+    // 새 instance가 붙으면 프로세스가 다시 시작된 것입니다.
+    clock.now = 15_000;
+    apps.connect(connection("b"));
+    expect(apps.get(POD)).toMatchObject({
+      instanceId: "b",
+      instanceSince: 15_000,
+      previousInstanceId: "a",
     });
   });
 
@@ -349,6 +374,7 @@ describe("AppStates", () => {
     expect(await store.deletedPods(0)).toEqual([
       { pod: deleted, deletedAt: 10_000 },
     ]);
+    expect(apps.get(POD)?.deletedAt).toBe(10_000);
 
     // 30분이 되기 전에는 남아 있습니다.
     clock.now = 10_000 + RETENTION_MS;
