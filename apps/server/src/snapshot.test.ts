@@ -71,12 +71,33 @@ describe("snapshotReply", () => {
 });
 
 describe("requestSnapshot", () => {
-  it("answers 404 when the pod has no SDK connection", async () => {
-    const reply = await requestSnapshot(new AgentRegistry(), hello.pod);
+  it("answers 404 not-connected when a known pod has no SDK connection", async () => {
+    const reply = await requestSnapshot(
+      new AgentRegistry(),
+      hello.pod,
+      () => true,
+    );
     expect(reply).toMatchObject({
       status: 404,
       body: { error: "not-connected" },
     });
+  });
+
+  it("answers 404 pod-not-found when the server knows nothing about the pod", async () => {
+    const asked: unknown[] = [];
+    const reply = await requestSnapshot(
+      new AgentRegistry(),
+      hello.pod,
+      (pod) => {
+        asked.push(pod);
+        return false;
+      },
+    );
+    expect(reply).toMatchObject({
+      status: 404,
+      body: { error: "pod-not-found" },
+    });
+    expect(asked).toEqual([hello.pod]);
   });
 
   it("answers 501 without sending when the SDK does not list snapshot", async () => {
@@ -94,7 +115,7 @@ describe("requestSnapshot", () => {
         close: () => {},
       }),
     );
-    const reply = await requestSnapshot(agents, hello.pod);
+    const reply = await requestSnapshot(agents, hello.pod, () => true);
     expect(reply).toMatchObject({
       status: 501,
       body: { error: "not-supported" },

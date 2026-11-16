@@ -1,6 +1,7 @@
 // 모든 Pod의 상태를 주기마다 판단해 들고 있습니다(docs/guides/T13.md 결정 5).
 // 쿠버네티스 Pod(ClusterState)와 SDK 상태가 있는 Pod(AppStates)를 모두 판단합니다.
 // 판단이 바뀌면 로그에 한 줄 남기고, 재시작이면 직전 instance의 event에서 원인 후보를 찾아 로그에 남깁니다.
+// 판단(status)이 바뀌면 저장소에 판단 변화를 남기고 evaluate()가 돌려줍니다(docs/guides/T14.md 결정 3, 4).
 // T14 조회 API와 SSE가 get·list로 읽습니다.
 import type { PodRef } from "@glasspod/protocol";
 import type { ClusterState, PodSummary } from "./cluster.js";
@@ -11,7 +12,7 @@ import { podKey, podLabel } from "./pod-key.js";
 import { judgePod, pickRestartCauses } from "./status.js";
 import type { Judgment } from "./status.js";
 import { RETENTION_MS } from "./store/store.js";
-import type { Store } from "./store/store.js";
+import type { StatusChangeRecord, Store } from "./store/store.js";
 
 // 판단하는 주기입니다. '3주기째 없음'과 '재시작 30분'은 메시지가 오지 않아도 시간이 지나면 바뀝니다.
 export const STATUS_INTERVAL_MS = 1000;
@@ -19,9 +20,11 @@ export const STATUS_INTERVAL_MS = 1000;
 const MAX_CAUSE_MESSAGE_LENGTH = 200;
 
 // Pod 하나의 판단입니다. since는 지금 판단(status)이 시작된 시각(서버 시계)입니다.
+// deployment는 쿠버네티스 요약이 있으면 ReplicaSet → Deployment, 없으면(지워짐) 앞에서 알던 값입니다.
 export interface PodStatusEntry extends Judgment {
   pod: PodRef;
   since: number;
+  deployment?: string;
 }
 
 export interface StatusMonitorOptions {
@@ -57,8 +60,10 @@ export class StatusMonitor {
   }
 
   // 모든 Pod를 판단합니다. 쿠버네티스에도 SDK 상태에도 없는 Pod는 목록에서 뺍니다.
-  evaluate(): void {
+  // 판단(status)이 바뀐 Pod의 판단 변화를 돌려줍니다. 저장소에도 남깁니다(기다리지 않음).
+  evaluate(): StatusChangeRecord[] {
     const now = this.now();
+    const changes: StatusChangeRecord[] = [];
     const sources = new Map<string, Sources>();
     for (const summary of this.cluster.pods.list()) {
       const pod = { namespace: summary.namespace, name: summary.name };
@@ -81,7 +86,14 @@ export class StatusMonitor {
         app: source.app,
         pod: source.summary,
       });
-      this.update(key, source.pod, judgment, now);
+      const deployment =
+        source.summary === undefined
+          ? this.entries.get(key)?.deployment
+          : this.cluster.deploymentOf(source.summary);
+      const change = this.update(key, source.pod, judgment, deployment, now);
+      if (change !== undefined) {
+        changes.push(change);
+      }
     }
 
     for (const [key, entry] of this.entries) {
@@ -94,6 +106,17 @@ export class StatusMonitor {
         });
       }
     }
+
+    for (const change of changes) {
+      this.store.addStatusChange(change).catch((error: unknown) => {
+        log.warn("store write failed", {
+          kind: "statusChanges",
+          pod: podLabel(change.pod),
+          detail: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+    return changes;
   }
 
   get(pod: PodRef): PodStatusEntry | undefined {
@@ -104,18 +127,25 @@ export class StatusMonitor {
     return [...this.entries.values()];
   }
 
+  // 판단을 바꾸고, 판단(status)이 바뀌었으면 판단 변화를 돌려줍니다.
   private update(
     key: string,
     pod: PodRef,
     judgment: Judgment,
+    deployment: string | undefined,
     now: number,
-  ): void {
+  ): StatusChangeRecord | undefined {
     const previous = this.entries.get(key);
     const since =
       previous !== undefined && previous.status === judgment.status
         ? previous.since
         : now;
-    const entry: PodStatusEntry = { pod, ...judgment, since };
+    const entry: PodStatusEntry = {
+      pod,
+      ...judgment,
+      since,
+      ...(deployment === undefined ? {} : { deployment }),
+    };
     this.entries.set(key, entry);
 
     if (previous === undefined || changed(previous, entry)) {
@@ -135,6 +165,19 @@ export class StatusMonitor {
       this.causesFound.set(key, previousInstanceId);
       void this.logRestartCauses(pod, previousInstanceId, now);
     }
+
+    if (previous !== undefined && previous.status === entry.status) {
+      return undefined;
+    }
+    return {
+      pod,
+      at: now,
+      status: entry.status,
+      severity: entry.severity,
+      ...(entry.reason === undefined ? {} : { reason: entry.reason }),
+      ...(previous === undefined ? {} : { previous: previous.status }),
+      ...(deployment === undefined ? {} : { deployment }),
+    };
   }
 
   // 직전 instance의 event에서 원인 후보를 골라 한 줄씩 남깁니다. 화면 표시는 T19입니다.

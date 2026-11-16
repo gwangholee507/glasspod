@@ -10,6 +10,7 @@ import type {
   MetricsRecord,
   PodRecords,
   PruneResult,
+  StatusChangeRecord,
   Store,
   StoreStats,
 } from "./store.js";
@@ -18,8 +19,10 @@ import type {
 export const MAX_METRICS_PER_POD = 2_000;
 export const MAX_EVENTS_PER_POD = 500;
 export const MAX_CONNECTIONS_PER_POD = 500;
+// 판단은 1초마다 바뀔 수 있어 30분이면 1,800건이 될 수 있습니다. 오래된 것부터 버립니다(docs/guides/T14.md 결정 3).
+export const MAX_STATUS_CHANGES_PER_POD = 500;
 
-type LimitedKind = "metrics" | "events" | "connections";
+type LimitedKind = "metrics" | "events" | "connections" | "statusChanges";
 
 interface Bucket {
   pod: PodRef;
@@ -28,6 +31,7 @@ interface Bucket {
   events: EventRecord[];
   connections: ConnectionRecord[];
   deletions: DeletedPodRecord[];
+  statusChanges: StatusChangeRecord[];
   // 상한을 넘었다고 이미 경고한 기록 종류입니다.
   warned: Set<LimitedKind>;
 }
@@ -39,6 +43,7 @@ export class MemoryStore implements Store {
     metrics: 0,
     events: 0,
     connections: 0,
+    statusChanges: 0,
   };
 
   async addMetrics(record: MetricsRecord): Promise<void> {
@@ -67,10 +72,27 @@ export class MemoryStore implements Store {
     this.bucket(record.pod).deletions.push(record);
   }
 
+  async addStatusChange(record: StatusChangeRecord): Promise<void> {
+    const bucket = this.bucket(record.pod);
+    this.push(
+      bucket,
+      "statusChanges",
+      bucket.statusChanges,
+      record,
+      MAX_STATUS_CHANGES_PER_POD,
+    );
+  }
+
   async podRecords(pod: PodRef, since: number): Promise<PodRecords> {
     const bucket = this.buckets.get(podKey(pod));
     if (bucket === undefined) {
-      return { metrics: [], events: [], connections: [], deletions: [] };
+      return {
+        metrics: [],
+        events: [],
+        connections: [],
+        deletions: [],
+        statusChanges: [],
+      };
     }
     return {
       metrics: bucket.metrics.filter((record) => record.receivedAt >= since),
@@ -80,6 +102,9 @@ export class MemoryStore implements Store {
         .sort((a, b) => a.ts - b.ts),
       connections: bucket.connections.filter((record) => record.at >= since),
       deletions: bucket.deletions.filter((record) => record.deletedAt >= since),
+      statusChanges: bucket.statusChanges.filter(
+        (record) => record.at >= since,
+      ),
     };
   }
 
@@ -95,6 +120,25 @@ export class MemoryStore implements Store {
     return deletions.sort((a, b) => a.deletedAt - b.deletedAt);
   }
 
+  async statusChanges(
+    since: number,
+    namespace?: string,
+  ): Promise<StatusChangeRecord[]> {
+    const changes: StatusChangeRecord[] = [];
+    for (const bucket of this.buckets.values()) {
+      if (namespace !== undefined && bucket.pod.namespace !== namespace) {
+        continue;
+      }
+      for (const record of bucket.statusChanges) {
+        if (record.at >= since) {
+          changes.push(record);
+        }
+      }
+    }
+    // 같은 시각(같은 판단 주기)이면 Pod를 넣은 순서가 남습니다(안정 정렬).
+    return changes.sort((a, b) => a.at - b.at);
+  }
+
   async stats(): Promise<StoreStats> {
     const stats: StoreStats = {
       pods: this.buckets.size,
@@ -102,15 +146,18 @@ export class MemoryStore implements Store {
       events: 0,
       connections: 0,
       deletedPods: 0,
+      statusChanges: 0,
       droppedMetrics: this.dropped.metrics,
       droppedEvents: this.dropped.events,
       droppedConnections: this.dropped.connections,
+      droppedStatusChanges: this.dropped.statusChanges,
     };
     for (const bucket of this.buckets.values()) {
       stats.metrics += bucket.metrics.length;
       stats.events += bucket.events.length;
       stats.connections += bucket.connections.length;
       stats.deletedPods += bucket.deletions.length;
+      stats.statusChanges += bucket.statusChanges.length;
     }
     return stats;
   }
@@ -122,11 +169,13 @@ export class MemoryStore implements Store {
       dropBefore(bucket.events, (record) => record.receivedAt, before);
       dropBefore(bucket.connections, (record) => record.at, before);
       dropBefore(bucket.deletions, (record) => record.deletedAt, before);
+      dropBefore(bucket.statusChanges, (record) => record.at, before);
       if (
         bucket.metrics.length === 0 &&
         bucket.events.length === 0 &&
         bucket.connections.length === 0 &&
-        bucket.deletions.length === 0
+        bucket.deletions.length === 0 &&
+        bucket.statusChanges.length === 0
       ) {
         this.buckets.delete(key);
         expiredPods.push(bucket.pod);
@@ -149,6 +198,7 @@ export class MemoryStore implements Store {
         events: [],
         connections: [],
         deletions: [],
+        statusChanges: [],
         warned: new Set(),
       };
       this.buckets.set(key, bucket);

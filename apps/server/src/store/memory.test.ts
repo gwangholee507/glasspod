@@ -5,9 +5,14 @@ import {
   MAX_CONNECTIONS_PER_POD,
   MAX_EVENTS_PER_POD,
   MAX_METRICS_PER_POD,
+  MAX_STATUS_CHANGES_PER_POD,
   MemoryStore,
 } from "./memory.js";
-import type { EventRecord, MetricsRecord } from "./store.js";
+import type {
+  EventRecord,
+  MetricsRecord,
+  StatusChangeRecord,
+} from "./store.js";
 
 const POD: PodRef = { namespace: "shop", name: "orders-1" };
 const OTHER: PodRef = { namespace: "shop", name: "orders-2" };
@@ -34,6 +39,10 @@ function event(ts: number, receivedAt: number, name = "app.x"): EventRecord {
     name,
     count: 1,
   };
+}
+
+function change(at: number, pod: PodRef = POD): StatusChangeRecord {
+  return { pod, at, status: "ok", severity: "none", previous: "no-sdk" };
 }
 
 function summary(name: string): PodSummary {
@@ -84,7 +93,13 @@ describe("MemoryStore", () => {
     expect((await store.podRecords(OTHER, 0)).metrics).toHaveLength(1);
     expect(
       await store.podRecords({ namespace: "shop", name: "nope" }, 0),
-    ).toEqual({ metrics: [], events: [], connections: [], deletions: [] });
+    ).toEqual({
+      metrics: [],
+      events: [],
+      connections: [],
+      deletions: [],
+      statusChanges: [],
+    });
   });
 
   it("keeps pods apart even when names contain a slash", async () => {
@@ -177,5 +192,46 @@ describe("MemoryStore", () => {
     expect((await store.deletedPods(0)).map((r) => r.pod.name)).toEqual([
       "orders-2",
     ]);
+  });
+
+  it("keeps status changes per pod and lists them by time and namespace", async () => {
+    const store = new MemoryStore();
+    const elsewhere: PodRef = { namespace: "pay", name: "api-1" };
+    await store.addStatusChange(change(2_000, OTHER));
+    await store.addStatusChange(change(1_000));
+    await store.addStatusChange(change(3_000, elsewhere));
+    await store.addStatusChange(change(2_000));
+
+    const all = await store.statusChanges(0);
+    expect(all.map((record) => [record.pod.name, record.at])).toEqual([
+      ["orders-1", 1_000],
+      ["orders-2", 2_000],
+      ["orders-1", 2_000],
+      ["api-1", 3_000],
+    ]);
+    expect(
+      (await store.statusChanges(1_500, "shop")).map((record) => record.at),
+    ).toEqual([2_000, 2_000]);
+    expect(
+      (await store.podRecords(POD, 1_500)).statusChanges.map((r) => r.at),
+    ).toEqual([2_000]);
+    expect(await store.stats()).toMatchObject({ pods: 3, statusChanges: 4 });
+  });
+
+  it("drops the oldest status changes over the limit and prunes them", async () => {
+    const store = new MemoryStore();
+    for (let index = 0; index < MAX_STATUS_CHANGES_PER_POD + 2; index += 1) {
+      await store.addStatusChange(change(index));
+    }
+    const kept = await store.statusChanges(0);
+    expect(kept).toHaveLength(MAX_STATUS_CHANGES_PER_POD);
+    expect(kept[0]?.at).toBe(2);
+    expect(await store.stats()).toMatchObject({ droppedStatusChanges: 2 });
+    expect(console.warn).toHaveBeenCalledTimes(1);
+
+    // 판단 변화만 남은 Pod(SDK 없음)도 다 지워지면 기록이 없는 Pod로 알립니다.
+    const result = await store.prune(MAX_STATUS_CHANGES_PER_POD + 2);
+    expect(result.expiredPods).toEqual([POD]);
+    expect(await store.statusChanges(0)).toEqual([]);
   });
 });

@@ -7,7 +7,11 @@ import type {
 } from "@glasspod/protocol";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PodSummary } from "./cluster.js";
-import { AppStates, MAX_METRIC_NAMES_PER_POD } from "./pods.js";
+import {
+  AppStates,
+  INCREASE_WINDOW_MS,
+  MAX_METRIC_NAMES_PER_POD,
+} from "./pods.js";
 import type { AppConnection } from "./pods.js";
 import { MemoryStore } from "./store/memory.js";
 import { RETENTION_MS } from "./store/store.js";
@@ -242,6 +246,36 @@ describe("AppStates", () => {
       lastSeq: 2,
       missed: 0,
     });
+  });
+
+  it("keeps counter increases of the last minute across instances", () => {
+    const { apps, clock } = setup();
+    const first = connection("a");
+    apps.connect(first);
+    // 처음 받은 값은 앞 점이 없어 증가량이 없습니다.
+    apps.receive(first, metrics(1, [counter("http.requests.errors_total", 3)]));
+    clock.now += 5_000;
+    apps.receive(first, metrics(2, [counter("http.requests.errors_total", 5)]));
+    // 60초가 지난 증가량은 지웁니다(딱 60초는 남김).
+    clock.now += INCREASE_WINDOW_MS + 1;
+    apps.receive(first, metrics(3, [counter("http.requests.errors_total", 6)]));
+    expect(apps.get(POD)?.increases.get("http.requests.errors_total")).toEqual([
+      { at: clock.now, increase: 1 },
+    ]);
+
+    // 새 instance의 첫 값은 리셋이라 그 값만큼 늘어난 것으로 셉니다. 앞의 증가량도 1분 동안 남습니다.
+    apps.disconnect(first, 1006);
+    const second = connection("b");
+    apps.connect(second);
+    clock.now += 1_000;
+    apps.receive(
+      second,
+      metrics(1, [counter("http.requests.errors_total", 2)]),
+    );
+    expect(apps.get(POD)?.increases.get("http.requests.errors_total")).toEqual([
+      { at: clock.now - 1_000, increase: 1 },
+      { at: clock.now, increase: 2 },
+    ]);
   });
 
   it("counts seq gaps as missing messages, also across reconnects", async () => {

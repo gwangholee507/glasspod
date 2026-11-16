@@ -228,4 +228,76 @@ describe("StatusMonitor", () => {
       ),
     ).toBe(true);
   });
+
+  it("returns and stores status changes only when the status changes", async () => {
+    const { apps, cluster, clock, store, monitor } = setup();
+    cluster.replicaSets.set({
+      namespace: "shop",
+      name: "orders-5f7c9",
+      uid: "rs",
+      deployment: "orders",
+      revision: "1",
+      desired: 1,
+    });
+    cluster.pods.set(summary(POD.name, { replicaSet: "orders-5f7c9" }));
+    // 서버가 처음 판단한 Pod는 previous가 없습니다.
+    expect(monitor.evaluate()).toEqual([
+      {
+        pod: POD,
+        at: 10_000,
+        status: "no-sdk",
+        severity: "none",
+        deployment: "orders",
+      },
+    ]);
+    // 판단이 그대로면 남기지 않습니다.
+    clock.now = 11_000;
+    expect(monitor.evaluate()).toEqual([]);
+
+    clock.now = 12_000;
+    apps.connect(connection("a"));
+    expect(monitor.evaluate()).toEqual([
+      {
+        pod: POD,
+        at: 12_000,
+        status: "ok",
+        severity: "none",
+        previous: "no-sdk",
+        deployment: "orders",
+      },
+    ]);
+    await vi.waitFor(async () =>
+      expect(
+        (await store.statusChanges(0)).map((record) => record.status),
+      ).toEqual(["no-sdk", "ok"]),
+    );
+  });
+
+  it("keeps the deployment of a pod after Kubernetes forgets it", () => {
+    const { apps, cluster, monitor } = setup();
+    cluster.replicaSets.set({
+      namespace: "shop",
+      name: "orders-5f7c9",
+      uid: "rs",
+      deployment: "orders",
+      revision: "1",
+      desired: 1,
+    });
+    const deleted = summary(POD.name, { replicaSet: "orders-5f7c9" });
+    cluster.pods.set(deleted);
+    apps.connect(connection("a"));
+    monitor.evaluate();
+    expect(monitor.get(POD)?.deployment).toBe("orders");
+
+    cluster.pods.delete("shop", POD.name);
+    apps.podDeleted(deleted);
+    const changes = monitor.evaluate();
+    expect(monitor.get(POD)).toMatchObject({
+      status: "terminated",
+      deployment: "orders",
+    });
+    expect(changes).toMatchObject([
+      { status: "terminated", reason: "deleted", deployment: "orders" },
+    ]);
+  });
 });

@@ -18,6 +18,8 @@ import type { Store, StoredMetric } from "./store/store.js";
 
 // Pod 하나에서 받는 지표 이름의 상한입니다. 넘는 새 이름의 값은 버립니다.
 export const MAX_METRIC_NAMES_PER_POD = 200;
+// counter마다 증가량을 들고 있는 시간입니다. 목록의 5xx/분이 씁니다(docs/guides/T14.md 결정 9, 10).
+export const INCREASE_WINDOW_MS = 60_000;
 
 const BYTES_PER_MB = 1024 * 1024;
 
@@ -32,6 +34,12 @@ export interface LatestValue {
   // SDK가 보낸 시각과 서버가 받은 시각입니다.
   ts: number;
   receivedAt: number;
+}
+
+// counter 하나의 증가량입니다. at은 서버가 받은 시각입니다.
+export interface CounterIncrease {
+  at: number;
+  increase: number;
 }
 
 // Pod 하나의 지금 상태입니다. 상태 판단(T13)이 읽고, 고치지 않습니다.
@@ -59,6 +67,9 @@ export interface AppState {
   readonly missed: number;
   // 이름마다 마지막 값입니다. instance가 바뀌면 비웁니다.
   readonly values: ReadonlyMap<string, LatestValue>;
+  // counter 이름마다 최근 증가량입니다(받은 순서). 넣을 때 INCREASE_WINDOW_MS보다 오래된 것을 지우므로,
+  // 읽는 쪽도 시각으로 다시 거릅니다. instance가 바뀌어도 남깁니다(리셋은 새 값만큼 늘어난 것으로 셈).
+  readonly increases: ReadonlyMap<string, readonly CounterIncrease[]>;
 }
 
 interface TrackedState {
@@ -77,6 +88,7 @@ interface TrackedState {
   lastSeq: number;
   missed: number;
   values: Map<string, LatestValue>;
+  increases: Map<string, CounterIncrease[]>;
   // 지금 상태를 바꾸는 연결(마지막으로 hello를 받아들인 연결)입니다.
   connection: AppConnection;
   // counter 리셋을 판단할 앞 점입니다. instance가 바뀌어도 남겨 둡니다.
@@ -120,6 +132,7 @@ export class AppStates {
         lastSeq: hello.seq,
         missed: 0,
         values: new Map(),
+        increases: new Map(),
         connection,
         counters: new Map(),
         names: new Set(),
@@ -283,9 +296,11 @@ export class AppStates {
         events: stats.events,
         connections: stats.connections,
         deletedPods: stats.deletedPods,
+        statusChanges: stats.statusChanges,
         droppedMetrics: stats.droppedMetrics,
         droppedEvents: stats.droppedEvents,
         droppedConnections: stats.droppedConnections,
+        droppedStatusChanges: stats.droppedStatusChanges,
         heapUsedMb: megabytes(memory.heapUsed),
         rssMb: megabytes(memory.rss),
       });
@@ -372,6 +387,7 @@ export class AppStates {
           } else {
             stored.increase = metric.value - previous.value;
           }
+          recordIncrease(current, metric.name, at, stored.increase);
         }
       }
       values.push(stored);
@@ -455,6 +471,29 @@ export class AppStates {
         detail: describe(error),
       });
     });
+  }
+}
+
+// 증가량을 넣고 INCREASE_WINDOW_MS보다 오래된 것을 지웁니다.
+function recordIncrease(
+  state: TrackedState,
+  name: string,
+  at: number,
+  increase: number,
+): void {
+  let list = state.increases.get(name);
+  if (list === undefined) {
+    list = [];
+    state.increases.set(name, list);
+  }
+  list.push({ at, increase });
+  const before = at - INCREASE_WINDOW_MS;
+  let index = 0;
+  while (index < list.length && (list[index] as CounterIncrease).at < before) {
+    index += 1;
+  }
+  if (index > 0) {
+    list.splice(0, index);
   }
 }
 

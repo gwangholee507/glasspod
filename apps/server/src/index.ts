@@ -1,10 +1,12 @@
 // Glasspod 서버를 시작합니다. HTTP(/health, /api)와 SDK WebSocket(/agent)을 같은 포트에서 받습니다.
 // 쿠버네티스 watch는 그 뒤에서 시작합니다(docs/guides/T12.md). Pod 상태 판단은 1초마다 합니다(docs/guides/T13.md).
+// 판단 뒤에 웹 화면용 목록을 다시 만들어 바뀐 것을 SSE로 보냅니다(docs/guides/T14.md).
 import { createServer } from "node:http";
 import { PROTOCOL_VERSION } from "@glasspod/protocol";
 import { AGENT_PATH, attachAgentServer } from "./agent.js";
 import { AgentRegistry } from "./agents.js";
 import { createApp } from "./app.js";
+import { PodFeed } from "./feed.js";
 import { ClusterState } from "./cluster.js";
 import { loadConfig } from "./config.js";
 import type { ServerConfig } from "./config.js";
@@ -14,6 +16,7 @@ import { log } from "./log.js";
 import { AppStates } from "./pods.js";
 import { STATUS_INTERVAL_MS, StatusMonitor } from "./status-monitor.js";
 import { MemoryStore } from "./store/memory.js";
+import { StreamHub } from "./stream.js";
 import type { Store, StoreKind } from "./store/store.js";
 import { ClusterWatcher } from "./watch.js";
 
@@ -57,13 +60,21 @@ const store = createStore(config.store);
 const apps = new AppStates(store);
 // 쿠버네티스 watch가 채우는 지금 상태입니다. T13 상태 판단과 T14 조회 API가 읽습니다.
 const cluster = new ClusterState();
-// SDK 상태와 쿠버네티스 상태를 합친 Pod별 판단입니다. T14 조회 API와 SSE가 읽습니다.
+// SDK 상태와 쿠버네티스 상태를 합친 Pod별 판단입니다. 판단이 바뀌면 저장소에 남깁니다.
 const statuses = new StatusMonitor({
   apps,
   cluster,
   store,
   metricsIntervalMs: config.metricsIntervalMs,
 });
+// 판단 주기마다 만드는 웹 화면용 목록과, 그 변화를 받는 SSE 연결입니다.
+const feed = new PodFeed({
+  statuses,
+  apps,
+  cluster,
+  namespaces: config.namespaces,
+});
+const streams = new StreamHub();
 // Pod가 지워지면 마지막 요약을 남기고, 그 Pod의 SDK 연결이 남아 있으면 닫습니다(docs/guides/T13.md 결정 4).
 const watcher =
   kube === undefined
@@ -72,13 +83,14 @@ const watcher =
         apps.podDeleted(pod);
         agents.disconnect(pod, "pod deleted");
       });
-const server = createServer(createApp(agents));
+const server = createServer(createApp({ agents, apps, store, feed, streams }));
 const agentServer = attachAgentServer(server, config, agents, apps);
 const pruneTimer = setInterval(() => void apps.prune(), PRUNE_INTERVAL_MS);
 const statsTimer = setInterval(() => void apps.logStats(), STATS_INTERVAL_MS);
 const statusTimer = setInterval(() => {
   try {
-    statuses.evaluate();
+    const changes = statuses.evaluate();
+    streams.broadcast(feed.refresh(changes));
   } catch (error) {
     log.error("pod status failed", {
       detail: error instanceof Error ? error.message : String(error),
@@ -124,6 +136,8 @@ function shutdown(signal: NodeJS.Signals): void {
   clearInterval(pruneTimer);
   clearInterval(statsTimer);
   clearInterval(statusTimer);
+  // 열린 SSE 응답이 있으면 server.close()가 끝나지 않으므로 먼저 닫습니다.
+  streams.closeAll();
   for (const client of agentServer.clients) {
     client.close(CLOSE_GOING_AWAY, "server shutting down");
   }

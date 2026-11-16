@@ -2,7 +2,13 @@
 // 어댑터는 운영자가 GLASSPOD_STORE로 고릅니다. 1차 범위는 메모리 어댑터(memory.ts)뿐입니다.
 // DB 어댑터(T32)도 붙일 수 있게 모든 메서드는 Promise를 돌려줍니다. 규칙은 docs/guides/T11.md에 있습니다.
 // 저장소는 받은 기록을 고치지 않고, 돌려준 기록도 부르는 쪽이 고치지 않습니다.
-import type { EventLevel, MetricKind, PodRef } from "@glasspod/protocol";
+import type {
+  EventLevel,
+  MetricKind,
+  PodRef,
+  PodSeverity,
+  PodStatus,
+} from "@glasspod/protocol";
 import type { PodSummary } from "../cluster.js";
 
 // GLASSPOD_STORE가 받는 값입니다. postgres는 T32에서 더합니다.
@@ -68,6 +74,19 @@ export interface DeletedPodRecord {
   deletedAt: number;
 }
 
+// 상태 판단이 바뀐 기록입니다(docs/guides/T14.md 결정 3, 4). 판단(status)이 바뀔 때와 서버가 처음 판단할 때 남습니다.
+export interface StatusChangeRecord {
+  pod: PodRef;
+  // 서버 시각입니다.
+  at: number;
+  status: PodStatus;
+  severity: PodSeverity;
+  reason?: string;
+  // 바로 앞 판단입니다. 서버가 처음 판단한 Pod면 없습니다.
+  previous?: PodStatus;
+  deployment?: string;
+}
+
 export interface PodRecords {
   // 받은 순서입니다.
   metrics: MetricsRecord[];
@@ -75,6 +94,8 @@ export interface PodRecords {
   events: EventRecord[];
   connections: ConnectionRecord[];
   deletions: DeletedPodRecord[];
+  // 일어난 순서(at)입니다.
+  statusChanges: StatusChangeRecord[];
 }
 
 export interface StoreStats {
@@ -84,10 +105,12 @@ export interface StoreStats {
   events: number;
   connections: number;
   deletedPods: number;
+  statusChanges: number;
   // 상한을 넘어 버린 수입니다(서버가 시작된 뒤 누적).
   droppedMetrics: number;
   droppedEvents: number;
   droppedConnections: number;
+  droppedStatusChanges: number;
 }
 
 export interface PruneResult {
@@ -101,10 +124,16 @@ export interface Store {
   addEvent(record: EventRecord): Promise<void>;
   addConnection(record: ConnectionRecord): Promise<void>;
   addDeletedPod(record: DeletedPodRecord): Promise<void>;
-  // since 이후(받은 시각, 연결은 at, 지워진 Pod는 deletedAt)의 Pod 하나의 기록입니다.
+  addStatusChange(record: StatusChangeRecord): Promise<void>;
+  // since 이후(받은 시각, 연결·판단 변화는 at, 지워진 Pod는 deletedAt)의 Pod 하나의 기록입니다.
   podRecords(pod: PodRef, since: number): Promise<PodRecords>;
   // since 이후에 지워진 Pod입니다. 지워진 순서입니다.
   deletedPods(since: number): Promise<DeletedPodRecord[]>;
+  // since 이후의 판단 변화입니다. namespace를 주면 그 namespace의 Pod만. 일어난 순서(at)입니다.
+  statusChanges(
+    since: number,
+    namespace?: string,
+  ): Promise<StatusChangeRecord[]>;
   stats(): Promise<StoreStats>;
   // before보다 이른 기록을 지웁니다.
   prune(before: number): Promise<PruneResult>;

@@ -19,12 +19,21 @@ export interface SnapshotReply {
   body: SnapshotBody | SnapshotErrorBody;
 }
 
+// knows는 그 Pod의 판단이 있는지입니다. SDK 연결이 없을 때 없는 Pod와 SDK가 없는 Pod를 나눕니다(docs/guides/T14.md 결정 6).
 export async function requestSnapshot(
   agents: AgentRegistry,
   pod: PodRef,
+  knows: (pod: PodRef) => boolean,
 ): Promise<SnapshotReply> {
   const session = agents.get(pod);
   if (session === undefined) {
+    if (!knows(pod)) {
+      return failure(
+        404,
+        "pod-not-found",
+        `no pod ${pod.namespace}/${pod.name} is known to the server`,
+      );
+    }
     return failure(
       404,
       "not-connected",

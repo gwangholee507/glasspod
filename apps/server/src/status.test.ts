@@ -50,6 +50,7 @@ function app(fields: Partial<AppState> = {}): AppState {
     lastSeq: 10,
     missed: 0,
     values: new Map(),
+    increases: new Map(),
     ...fields,
   };
 }

@@ -48,6 +48,11 @@ function readInteger(
   return value;
 }
 
+// 쿠버네티스 namespace 이름 규칙에 맞는지입니다. 조회 API의 namespace 쿼리도 이것으로 봅니다(docs/guides/T14.md 결정 8).
+export function isNamespaceName(text: string): boolean {
+  return text.length <= MAX_NAMESPACE_LENGTH && NAMESPACE_PATTERN.test(text);
+}
+
 // 쉼표로 나눈 namespace 목록을 읽습니다. 빈 항목이나 규칙에 맞지 않는 이름이 있으면 시작하지 않습니다.
 function readNamespaces(env: Env, name: string, fallback: string): string[] {
   const raw = env[name];
@@ -55,10 +60,7 @@ function readNamespaces(env: Env, name: string, fallback: string): string[] {
   const namespaces: string[] = [];
   for (const part of text.split(",")) {
     const namespace = part.trim();
-    if (
-      namespace.length > MAX_NAMESPACE_LENGTH ||
-      !NAMESPACE_PATTERN.test(namespace)
-    ) {
+    if (!isNamespaceName(namespace)) {
       throw new Error(
         `${name} must be a comma-separated list of namespace names (got "${raw}")`,
       );
