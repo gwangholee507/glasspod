@@ -1,15 +1,25 @@
-// Pod 상세 자리입니다. 상세 API(T14)와 snapshot API(T09)를 불러 원본 JSON과 오류를 그대로 보여 줍니다.
-// 판단 머리줄, '무슨 일이 있었나', 지표 그래프, snapshot 표시는 T19에서 만듭니다.
+// Pod 상세 자리(분할 화면의 오른쪽)입니다. 상세 API(T14)와 snapshot API(T09)를 불러 원본 JSON과 오류를 그대로 보여 줍니다.
+// 머리줄의 판단 배지는 목록 스트림의 항목을 씁니다(docs/guides/T18.md 결정 20).
+// '무슨 일이 있었나', 지표 그래프, snapshot 표시는 T19에서 만듭니다.
 import type { PodDetailBody, SnapshotBody } from "@glasspod/protocol";
 import type { ReactNode } from "react";
 import { Link, useParams } from "react-router";
 import type { ApiResult } from "../api/client.js";
 import { getPod, getSnapshot } from "../api/pods.js";
 import { useApiResult } from "../api/useApiResult.js";
+import { overviewLink, useShell } from "../shell/shellContext.js";
+import { ChevronLeftIcon } from "../ui/icons.js";
+import { StatusBadge } from "../ui/StatusBadge.js";
+import { podSentence } from "../view/podText.js";
 
 export function PodDetailPage() {
   // 라우트가 두 값을 모두 정하므로 비어 있을 수 없습니다.
   const { namespace = "", name = "" } = useParams();
+  // filter는 목록에서 고른 namespace(주소의 ?namespace=)이고, namespace는 이 Pod의 namespace입니다.
+  const { stream, namespace: filter, now } = useShell();
+  const item = stream.state?.list.pods.find(
+    (pod) => pod.pod.namespace === namespace && pod.pod.name === name,
+  );
   const key = JSON.stringify([namespace, name]);
   const detail = useApiResult(key, (signal) =>
     getPod({ namespace, name }, signal),
@@ -19,18 +29,25 @@ export function PodDetailPage() {
   );
 
   return (
-    <section className="space-y-6">
-      <div className="space-y-1">
-        <p className="text-sm text-slate-500">
-          <Link to="/" className="hover:text-deep-teal">
-            Pod 목록
-          </Link>
-          <span className="mx-1.5">/</span>
-          <span className="font-mono">{namespace}</span>
+    <section className="space-y-6 px-6 py-8 lg:px-8">
+      <div className="space-y-2">
+        <Link
+          to={overviewLink(filter)}
+          className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-deep-teal"
+        >
+          <ChevronLeftIcon className="size-4" />
+          한눈에 보기로
+        </Link>
+        <div className="flex flex-wrap items-center gap-3">
+          {item !== undefined && <StatusBadge status={item.status} />}
+          <h1 className="font-mono text-xl font-semibold break-all text-slate-900">
+            {name}
+          </h1>
+        </div>
+        <p className="text-sm text-slate-600">
+          <span className="font-mono text-slate-500">{namespace}</span>
+          {item !== undefined && <> · {podSentence(item, now)}</>}
         </p>
-        <h1 className="font-mono text-2xl font-semibold break-all text-deep-teal">
-          {name}
-        </h1>
       </div>
 
       <Panel
@@ -80,7 +97,7 @@ function Panel({
   children: ReactNode;
 }) {
   return (
-    <div className="space-y-3 rounded-lg border border-mist bg-white p-4">
+    <div className="space-y-3 rounded-xl border border-line bg-white p-4">
       <div className="flex items-center justify-between gap-4">
         <h2 className="font-semibold text-slate-800">{title}</h2>
         <button

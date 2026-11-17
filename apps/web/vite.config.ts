@@ -81,6 +81,15 @@ export default defineConfig(({ command }) => {
                 answerProxyError(target, error, response);
               }
             });
+            // 서버 쪽 연결이 응답 중간에 끊기면(port-forward 종료 등) Vite는 브라우저 쪽 응답을 끝내지 않아
+            // SSE가 열린 채로 멈춥니다. 그때 브라우저 쪽도 끊어 EventSource가 끊김을 알게 합니다(docs/guides/T18.md '구현하며 확인한 것').
+            proxy.on("proxyRes", (proxyResponse, _request, response) => {
+              proxyResponse.on("close", () => {
+                if (!proxyResponse.complete && !response.writableEnded) {
+                  response.destroy();
+                }
+              });
+            });
           },
         },
       },

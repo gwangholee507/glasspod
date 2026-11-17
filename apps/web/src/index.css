@@ -3,8 +3,8 @@
 /*
  * 브랜드 색과 글꼴입니다(design.md 12장). 여기 적은 값은 Tailwind 클래스(bg-paper, text-deep-teal, font-brand 등)가 되고
  * :root의 CSS 변수(--color-paper 등)로도 나옵니다. 색과 글꼴은 이곳에서만 정합니다.
- * 글꼴 파일은 아직 넣지 않았습니다. 설치되어 있지 않으면 대체 글꼴로 보입니다(docs/guides/T17.md 결정 18).
- * 다크 모드 색은 D9에서 정합니다.
+ * 글꼴 파일은 npm 패키지에서 번들에 넣습니다(main.tsx, docs/guides/T18.md 결정 21). CDN은 쓰지 않습니다.
+ * 밝은 화면만 만듭니다. 다크 모드 색은 확장 작업(T33)에서 정합니다.
  */
 @theme {
   --color-deep-teal: #0b5f6e;
@@ -13,16 +13,32 @@
   --color-paper: #f7fbfc;
   --color-coral: #ff7a59;
 
+  /* 상태 배지와 강조 색(design.md 12장 '상태 배지와 강조 색', docs/guides/T18.md '색') */
+  --color-critical-ink: #4a1608;
+  --color-warning-wash: #ffede7;
+  --color-warning-line: #ffc9b8;
+  --color-warning-ink: #b03a1a;
+  --color-neutral-wash: #eef2f4;
+  --color-neutral-ink: #475569;
+  --color-neutral-mark: #b8cbd0;
+
+  /* 칸 테두리와 구분선, 탭 바탕 */
+  --color-line: #dde9ec;
+  --color-tab: #f1f7f8;
+
   --font-sans:
-    "Pretendard", system-ui, -apple-system, "Apple SD Gothic Neo",
-    "Noto Sans KR", sans-serif;
-  --font-brand: "Manrope", system-ui, -apple-system, sans-serif;
+    "Pretendard Variable", "Pretendard", system-ui, -apple-system,
+    "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+  --font-brand:
+    "Manrope Variable", "Manrope", system-ui, -apple-system, sans-serif;
   --font-mono:
-    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular,
+    Menlo, Consolas, monospace;
 }
 
 @layer base {
   body {
-    @apply bg-paper text-slate-800 antialiased;
+    /* 한글은 낱말 중간에서 줄을 바꾸지 않습니다. Pod 이름처럼 긴 영문은 쓰는 곳에서 break-all을 줍니다. */
+    @apply bg-paper break-keep text-slate-800 antialiased;
   }
 }

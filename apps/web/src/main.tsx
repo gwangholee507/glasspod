@@ -3,6 +3,10 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import { App } from "./App.js";
+// 글꼴 파일입니다(docs/guides/T18.md 결정 21). Pretendard는 화면에 쓰인 글자의 조각만 받는 판(dynamic subset)입니다.
+import "pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css";
+import "@fontsource-variable/manrope";
+import "@fontsource-variable/jetbrains-mono";
 import "./index.css";
 
 const root = document.getElementById("root");

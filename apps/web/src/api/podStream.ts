@@ -19,7 +19,7 @@ export const MAX_STREAM_STATUS_CHANGES = 500;
 
 export interface PodStreamState {
   list: PodListBody;
-  // 이 화면이 스트림으로 받은 판단 변화입니다(받은 순서). 그 전 30분은 GET /api/status-changes로 받습니다.
+  // 마지막 pods 뒤에 스트림으로 받은 판단 변화입니다(받은 순서). 그 전 30분은 GET /api/status-changes로 받습니다.
   statusChanges: PodStatusChange[];
 }
 
@@ -99,33 +99,44 @@ export function applyPodChanges(
   return { list, statusChanges };
 }
 
-// 다시 붙어 pods를 받으면 목록은 바꾸고, 받아 둔 판단 변화는 남깁니다.
-export function applyPodList(
-  state: PodStreamState | undefined,
-  list: PodListBody,
-): PodStreamState {
-  return { list, statusChanges: state?.statusChanges ?? [] };
+// pods(목록 전체)를 받으면 목록과 받아 둔 판단 변화를 모두 새로 시작합니다.
+// 판단 변화의 지난 30분은 화면이 pods를 받을 때마다 GET /api/status-changes로 다시 받으므로(docs/guides/T18.md 결정 18),
+// 끊긴 동안의 변화도 채워지고, 다시 붙은 서버가 다른 서버(다시 시작됨 등)여도 그 서버의 기록과 어긋나지 않습니다.
+export function applyPodList(list: PodListBody): PodStreamState {
+  return { list, statusChanges: [] };
 }
 
 interface Streamed {
   namespace: string | undefined;
   state: PodStreamState | undefined;
   status: PodStreamStatus;
+  // 이 namespace에서 pods(목록 전체)를 받은 횟수입니다. 처음 붙거나 다시 붙을 때마다 1씩 늡니다.
+  opens: number;
+}
+
+export interface PodStream {
+  state: PodStreamState | undefined;
+  status: PodStreamStatus;
+  // pods를 받은 횟수입니다. 스트림 밖에서 받는 기록(판단 변화)을 다시 붙을 때마다 다시 부르는 데 씁니다(docs/guides/T18.md 결정 18).
+  opens: number;
 }
 
 // namespace가 바뀌면 다시 엽니다. 화면을 떠나면 닫습니다.
-export function usePodStream(namespace?: string): {
-  state: PodStreamState | undefined;
-  status: PodStreamStatus;
-} {
+export function usePodStream(namespace?: string): PodStream {
   const [streamed, setStreamed] = useState<Streamed>({
     namespace,
     state: undefined,
     status: "connecting",
+    opens: 0,
   });
 
   useEffect(() => {
-    setStreamed({ namespace, state: undefined, status: "connecting" });
+    setStreamed({
+      namespace,
+      state: undefined,
+      status: "connecting",
+      opens: 0,
+    });
     let source: EventSource | undefined;
     let reopenTimer: ReturnType<typeof setTimeout> | undefined;
     let failures = 0;
@@ -148,8 +159,9 @@ export function usePodStream(namespace?: string): {
           failures = 0;
           setStreamed((previous) => ({
             namespace,
-            state: applyPodList(previous.state, list),
+            state: applyPodList(list),
             status: "open",
+            opens: previous.opens + 1,
           }));
         }
       });
@@ -184,7 +196,11 @@ export function usePodStream(namespace?: string): {
 
   // namespace가 바뀐 직후의 렌더에서는 이전 namespace의 목록을 보이지 않습니다.
   if (streamed.namespace !== namespace) {
-    return { state: undefined, status: "connecting" };
+    return { state: undefined, status: "connecting", opens: 0 };
   }
-  return { state: streamed.state, status: streamed.status };
+  return {
+    state: streamed.state,
+    status: streamed.status,
+    opens: streamed.opens,
+  };
 }

@@ -101,14 +101,9 @@ describe("applyPodChanges", () => {
 });
 
 describe("applyPodList", () => {
-  it("replaces the list and keeps status changes after a reconnect", () => {
-    const kept = {
-      ...STATE,
-      statusChanges: [] as PodStreamState["statusChanges"],
-    };
+  it("starts over with the new list and no status changes after a reconnect", () => {
     const list = { ...STATE.list, pods: [] };
-    expect(applyPodList(kept, list)).toEqual({ list, statusChanges: [] });
-    expect(applyPodList(undefined, list).statusChanges).toEqual([]);
+    expect(applyPodList(list)).toEqual({ list, statusChanges: [] });
   });
 });
 

@@ -93,9 +93,10 @@ glasspod.state('app.mode', 'ready');                    // 상태 등록, 바뀌
 - 상태 판단: 서버가 1초마다 Pod마다 SDK 신호와 쿠버네티스 상태를 합쳐 정상, 앱 멈춤 의심(연결은 열렸는데 metrics가 끊김), 연결 끊김, 재시작, Pod 이상(CrashLoopBackOff·이미지 오류), 준비 안 됨, 시작 중, SDK 없음, 종료됨 가운데 하나로 판단함. 재시작이면 OOMKilled 같은 종료 이유와 재시작 전 프로세스가 마지막으로 보낸 예외를 원인 후보로 찾음. 지워진 Pod의 남은 SDK 연결은 서버가 닫음
 - 웹 화면 뼈대: React + Vite, React Router, Tailwind CSS. 공통 틀(로고와 메뉴), 목록 자리, Pod 상세 자리(`/pods/:namespace/:name`)에서 snapshot을 불러 원본 JSON과 오류를 보여 줌. `npm run dev:web`으로 띄우면 개발 서버가 `/api` 요청을 Glasspod 서버로 넘김
 
-- 웹 조회 API와 실시간 갱신: `GET /api/pods`(Pod별 판단, 쿠버네티스 상태, SDK 연결, 이벤트 루프 지연·힙·요청 응답 시간·5xx/분), `GET /api/pods/:namespace/:name`(마지막 지표 값, 최근 30분 이벤트와 판단 변화, 재시작 원인 후보), `GET /api/status-changes`(최근 30분 판단 변화). `GET /api/stream`(SSE)은 처음에 목록 전체를, 그 뒤 1초마다 바뀐 Pod만 보냄. 웹 화면의 목록 자리에서 이 목록이 실시간으로 바뀌는 것을 볼 수 있음
+- 웹 조회 API와 실시간 갱신: `GET /api/pods`(Pod별 판단, 쿠버네티스 상태, SDK 연결, 이벤트 루프 지연·힙·요청 응답 시간·5xx/분), `GET /api/pods/:namespace/:name`(마지막 지표 값, 최근 30분 이벤트와 판단 변화, 재시작 원인 후보), `GET /api/status-changes`(최근 30분 판단 변화). `GET /api/stream`(SSE)은 처음에 목록 전체를, 그 뒤 1초마다 바뀐 Pod만 보냄
+- Pod 목록 화면: 왼쪽 메뉴, 가운데 Pod 목록, 오른쪽 자리의 분할 화면. 위험·주의인 Pod를 '지금 볼 것'으로 묶어 맨 위에 두고, Pod마다 상태 배지, 판단 문장, 이벤트 루프 지연·힙·요청 응답 시간, 5xx/분을 실시간으로 보여 줌. '문제'만 보기, Deployment별 묶기, 이름으로 찾기. Pod를 고르기 전 오른쪽에는 Deployment별 요약과 최근 30분 판단 변화 타임라인. 글꼴(Pretendard, Manrope, JetBrains Mono)은 번들에 들어 있어 인터넷 없이도 보임
 
-Pod 목록과 상세 화면은 아직 꾸미지 않은 표와 원본 JSON입니다. 분할 화면과 상태 배지(목록), 지표 그래프와 '무슨 일이 있었나'(상세)는 다음 작업입니다.
+Pod 상세 화면은 아직 원본 JSON입니다. 지표 그래프, '무슨 일이 있었나', snapshot 표시는 다음 작업입니다.
 
 첫 마일스톤은 [대표 시나리오](docs/design.md#6-대표-시나리오-pod-하나가-느려질-때)를 로컬 클러스터에서 처음부터 끝까지 돌려 보는 것입니다. 느려진 Pod 하나를 화면에서 찾고, 트래픽에서 뺀 채로 원인을 확인한 뒤 삭제합니다.
 
