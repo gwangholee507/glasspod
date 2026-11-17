@@ -1,5 +1,6 @@
 // Pod에 대한 서버 API입니다. 목록·상세·판단 변화·SSE는 docs/guides/T14.md, snapshot은 docs/guides/T09.md에 있습니다.
 import type {
+  MetricSeriesBody,
   PodDetailBody,
   PodListBody,
   PodRef,
@@ -48,6 +49,20 @@ export function getPod(
   signal?: AbortSignal,
 ): Promise<ApiResult<PodDetailBody>> {
   return getJson<PodDetailBody>(podApiPath(pod), signal);
+}
+
+// 그래프용 시계열 주소입니다. 지표 이름은 쉼표로 잇습니다(docs/guides/T19.md 결정 5).
+export function seriesPath(pod: PodRef, metrics: readonly string[]): string {
+  return `${podApiPath(pod)}/series?${new URLSearchParams({ metrics: metrics.join(",") }).toString()}`;
+}
+
+// 이 Pod와 같은 Deployment의 다른 Pod의 최근 30분 시계열입니다.
+export function getSeries(
+  pod: PodRef,
+  metrics: readonly string[],
+  signal?: AbortSignal,
+): Promise<ApiResult<MetricSeriesBody>> {
+  return getJson<MetricSeriesBody>(seriesPath(pod, metrics), signal);
 }
 
 // 최근 30분 판단 변화입니다(타임라인).

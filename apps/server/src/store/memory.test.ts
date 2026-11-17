@@ -4,12 +4,14 @@ import type { PodSummary } from "../cluster.js";
 import {
   MAX_CONNECTIONS_PER_POD,
   MAX_EVENTS_PER_POD,
+  MAX_KUBE_EVENTS_PER_POD,
   MAX_METRICS_PER_POD,
   MAX_STATUS_CHANGES_PER_POD,
   MemoryStore,
 } from "./memory.js";
 import type {
   EventRecord,
+  KubeEventRecord,
   MetricsRecord,
   StatusChangeRecord,
 } from "./store.js";
@@ -43,6 +45,24 @@ function event(ts: number, receivedAt: number, name = "app.x"): EventRecord {
 
 function change(at: number, pod: PodRef = POD): StatusChangeRecord {
   return { pod, at, status: "ok", severity: "none", previous: "no-sdk" };
+}
+
+function kubeEvent(
+  uid: string,
+  lastAt: number,
+  receivedAt: number,
+  count = 1,
+): KubeEventRecord {
+  return {
+    pod: POD,
+    uid,
+    type: "Warning",
+    reason: "Unhealthy",
+    message: "Readiness probe failed",
+    count,
+    lastAt,
+    receivedAt,
+  };
 }
 
 function summary(name: string): PodSummary {
@@ -99,6 +119,7 @@ describe("MemoryStore", () => {
       connections: [],
       deletions: [],
       statusChanges: [],
+      kubeEvents: [],
     });
   });
 
@@ -233,5 +254,37 @@ describe("MemoryStore", () => {
     const result = await store.prune(MAX_STATUS_CHANGES_PER_POD + 2);
     expect(result.expiredPods).toEqual([POD]);
     expect(await store.statusChanges(0)).toEqual([]);
+  });
+
+  it("replaces kube events with the same uid and returns them by last time", async () => {
+    const store = new MemoryStore();
+    await store.addKubeEvent(kubeEvent("probe", 1_000, 1_000));
+    await store.addKubeEvent(kubeEvent("kill", 1_500, 1_500));
+    // 같은 Event의 횟수가 늘어 다시 옴: 하나로 남고 마지막 시각이 바뀝니다.
+    await store.addKubeEvent(kubeEvent("probe", 3_000, 3_000, 4));
+
+    const { kubeEvents } = await store.podRecords(POD, 0);
+    expect(kubeEvents.map((record) => [record.uid, record.count])).toEqual([
+      ["kill", 1],
+      ["probe", 4],
+    ]);
+    expect(await store.stats()).toMatchObject({ kubeEvents: 2 });
+
+    // 30분은 받은 시각으로 셉니다. 다시 받은 Event는 늦게 지워집니다.
+    await store.prune(2_000);
+    expect(
+      (await store.podRecords(POD, 0)).kubeEvents.map((record) => record.uid),
+    ).toEqual(["probe"]);
+  });
+
+  it("drops the oldest kube events over the limit", async () => {
+    const store = new MemoryStore();
+    for (let index = 0; index < MAX_KUBE_EVENTS_PER_POD + 1; index += 1) {
+      await store.addKubeEvent(kubeEvent(`e${index}`, index, index));
+    }
+    const { kubeEvents } = await store.podRecords(POD, 0);
+    expect(kubeEvents).toHaveLength(MAX_KUBE_EVENTS_PER_POD);
+    expect(kubeEvents[0]?.uid).toBe("e1");
+    expect(await store.stats()).toMatchObject({ droppedKubeEvents: 1 });
   });
 });

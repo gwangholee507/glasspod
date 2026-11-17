@@ -107,3 +107,22 @@ export function HexagonIcon({ className }: IconProps) {
     </Icon>
   );
 }
+
+// 재시작, 다시 받기(한 바퀴 돌기)
+export function RotateIcon({ className }: IconProps) {
+  return (
+    <Icon className={className}>
+      <path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4h4" />
+    </Icon>
+  );
+}
+
+// snapshot(사진 찍기)
+export function CameraIcon({ className }: IconProps) {
+  return (
+    <Icon className={className}>
+      <path d="M4 8h3l1.5-2.5h7L17 8h3v11H4z" />
+      <circle cx="12" cy="13" r="3.5" />
+    </Icon>
+  );
+}

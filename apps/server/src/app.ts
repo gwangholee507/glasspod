@@ -17,7 +17,15 @@ import { STREAM_HEADERS } from "./stream.js";
 import type { StreamHub } from "./stream.js";
 import { RETENTION_MS } from "./store/store.js";
 import type { Store } from "./store/store.js";
-import { parseNamespaceQuery, podDetail, statusChangeItem } from "./views.js";
+import { stallLimitMs } from "./status.js";
+import {
+  metricSeriesBody,
+  parseMetricsQuery,
+  parseNamespaceQuery,
+  podDetail,
+  seriesPods,
+  statusChangeItem,
+} from "./views.js";
 
 // 판단 변화 조회가 돌려주는 최대 건수입니다. 넘으면 최근 것만 돌려줍니다(결정 14).
 export const MAX_STATUS_CHANGES_RESPONSE = 2_000;
@@ -28,6 +36,8 @@ export interface AppDependencies {
   store: Store;
   feed: PodFeed;
   streams: StreamHub;
+  // 시계열의 끊김 기준(3주기)에 씁니다(docs/guides/T19.md 결정 6).
+  metricsIntervalMs: number;
   now?: () => number;
 }
 
@@ -73,6 +83,41 @@ export function createApp(deps: AppDependencies): Express {
     const serverTime = now();
     const records = await store.podRecords(pod, serverTime - RETENTION_MS);
     response.json(podDetail(item, apps.get(pod), records, serverTime));
+  });
+
+  // 그래프용 시계열: 이 Pod와 같은 Deployment의 다른 Pod, 최근 30분입니다(docs/guides/T19.md 결정 5, 6).
+  app.get("/api/pods/:namespace/:name/series", async (request, response) => {
+    const pod: PodRef = {
+      namespace: request.params.namespace,
+      name: request.params.name,
+    };
+    const item = feed.item(pod);
+    if (item === undefined) {
+      sendError(response, 404, "pod-not-found", notFoundDetail(pod));
+      return;
+    }
+    const query = parseMetricsQuery(request.query.metrics);
+    if (!query.ok) {
+      sendError(response, 400, "invalid-query", query.detail);
+      return;
+    }
+    const serverTime = now();
+    const since = serverTime - RETENTION_MS;
+    const pods = await Promise.all(
+      seriesPods(item, feed.list(pod.namespace).pods).map(async (ref) => ({
+        pod: ref,
+        records: (await store.podRecords(ref, since)).metrics,
+      })),
+    );
+    response.json(
+      metricSeriesBody(
+        query.names,
+        pods,
+        stallLimitMs(deps.metricsIntervalMs),
+        serverTime,
+        since,
+      ),
+    );
   });
 
   // Pod 하나의 지금 상태(snapshot)를 그 Pod의 SDK에 물어 돌려줍니다. 답을 기다리느라 최대 5초 걸립니다.

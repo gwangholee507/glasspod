@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { podApiPath, podsPath, statusChangesPath, streamPath } from "./pods.js";
+import {
+  podApiPath,
+  podsPath,
+  seriesPath,
+  statusChangesPath,
+  streamPath,
+} from "./pods.js";
 
 describe("podApiPath", () => {
   it("namespace와 이름을 경로에 넣음", () => {
@@ -25,5 +31,18 @@ describe("목록·판단 변화·SSE 경로", () => {
   it("namespace를 쿼리로 인코딩함", () => {
     expect(podsPath("glasspod-demo")).toBe("/api/pods?namespace=glasspod-demo");
     expect(streamPath("a&b=c")).toBe("/api/stream?namespace=a%26b%3Dc");
+  });
+});
+
+describe("seriesPath", () => {
+  it("지표 이름을 쉼표로 이어 쿼리로 인코딩함", () => {
+    expect(
+      seriesPath({ namespace: "shop", name: "orders-1" }, [
+        "runtime.heap.used_bytes",
+        "app.queue.length",
+      ]),
+    ).toBe(
+      "/api/pods/shop/orders-1/series?metrics=runtime.heap.used_bytes%2Capp.queue.length",
+    );
   });
 });

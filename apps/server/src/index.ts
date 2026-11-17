@@ -76,14 +76,36 @@ const feed = new PodFeed({
 });
 const streams = new StreamHub();
 // Pod가 지워지면 마지막 요약을 남기고, 그 Pod의 SDK 연결이 남아 있으면 닫습니다(docs/guides/T13.md 결정 4).
+// Pod에 대한 쿠버네티스 Event는 저장소에 30분 남깁니다(docs/guides/T19.md 결정 8).
 const watcher =
   kube === undefined
     ? undefined
-    : new ClusterWatcher(kube, config.namespaces, cluster, (pod) => {
-        apps.podDeleted(pod);
-        agents.disconnect(pod, "pod deleted");
-      });
-const server = createServer(createApp({ agents, apps, store, feed, streams }));
+    : new ClusterWatcher(
+        kube,
+        config.namespaces,
+        cluster,
+        (pod) => {
+          apps.podDeleted(pod);
+          agents.disconnect(pod, "pod deleted");
+        },
+        (event) => {
+          store.addKubeEvent(event).catch((error: unknown) => {
+            log.warn("kube event not stored", {
+              detail: error instanceof Error ? error.message : String(error),
+            });
+          });
+        },
+      );
+const server = createServer(
+  createApp({
+    agents,
+    apps,
+    store,
+    feed,
+    streams,
+    metricsIntervalMs: config.metricsIntervalMs,
+  }),
+);
 const agentServer = attachAgentServer(server, config, agents, apps);
 const pruneTimer = setInterval(() => void apps.prune(), PRUNE_INTERVAL_MS);
 const statsTimer = setInterval(() => void apps.logStats(), STATS_INTERVAL_MS);

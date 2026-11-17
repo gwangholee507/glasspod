@@ -2,12 +2,22 @@ import { describe, expect, it } from "vitest";
 import type { PodSummary } from "./cluster.js";
 import type { AppState, CounterIncrease, LatestValue } from "./pods.js";
 import type { PodStatusEntry } from "./status-monitor.js";
-import type { EventRecord, PodRecords } from "./store/store.js";
+import type {
+  EventRecord,
+  MetricsRecord,
+  PodRecords,
+  StoredMetric,
+} from "./store/store.js";
 import {
+  MAX_SERIES_SIBLINGS,
   listMetrics,
+  metricSeriesBody,
+  parseMetricsQuery,
   parseNamespaceQuery,
   podDetail,
   podItem,
+  podSeries,
+  seriesPods,
 } from "./views.js";
 
 const NOW = 1_000_000;
@@ -239,6 +249,17 @@ describe("podDetail", () => {
           previous: "disconnected",
         },
       ],
+      kubeEvents: [
+        {
+          pod: POD,
+          uid: "e1",
+          type: "Warning",
+          reason: "BackOff",
+          count: 2,
+          lastAt: NOW - 20_000,
+          receivedAt: NOW - 20_000,
+        },
+      ],
     };
     const item = podItem(entry(), summary(), undefined, NOW);
     const detail = podDetail(
@@ -263,6 +284,15 @@ describe("podDetail", () => {
       ["a", 1],
     ]);
     expect(detail.statusChanges).toHaveLength(1);
+    expect(detail.kubeEvents).toEqual([
+      {
+        uid: "e1",
+        type: "Warning",
+        reason: "BackOff",
+        count: 2,
+        lastAt: NOW - 20_000,
+      },
+    ]);
   });
 
   it("has no restart causes without a previous instance", () => {
@@ -281,6 +311,7 @@ describe("podDetail", () => {
         connections: [],
         deletions: [],
         statusChanges: [],
+        kubeEvents: [],
       },
       NOW,
     );
@@ -303,4 +334,182 @@ describe("parseNamespaceQuery", () => {
       expect(parseNamespaceQuery(value)).toMatchObject({ ok: false });
     },
   );
+});
+
+describe("parseMetricsQuery", () => {
+  it("splits names, trims and drops repeats", () => {
+    expect(
+      parseMetricsQuery(
+        "runtime.heap.used_bytes, app.queue.length,app.queue.length",
+      ),
+    ).toEqual({
+      ok: true,
+      names: ["runtime.heap.used_bytes", "app.queue.length"],
+    });
+  });
+
+  it.each([
+    [undefined],
+    [""],
+    [["a.b", "c.d"]],
+    ["Bad.Name"],
+    ["heap"],
+    ["a.b,"],
+    [Array.from({ length: 9 }, (_, index) => `app.m${index}`).join(",")],
+  ])("rejects %o", (value) => {
+    expect(parseMetricsQuery(value).ok).toBe(false);
+  });
+});
+
+describe("seriesPods", () => {
+  function listItem(name: string, deployment?: string, namespace = "shop") {
+    return podItem(
+      entry({
+        pod: { namespace, name },
+        deployment,
+      }),
+      undefined,
+      undefined,
+      NOW,
+    );
+  }
+
+  it("puts the pod first and then pods of the same deployment by name", () => {
+    const item = listItem("orders-b", "orders");
+    const items = [
+      listItem("orders-c", "orders"),
+      item,
+      listItem("orders-a", "orders"),
+      listItem("other", "payments"),
+      listItem("orders-z", "orders", "other-ns"),
+      listItem("loose"),
+    ];
+    expect(seriesPods(item, items).map((pod) => pod.name)).toEqual([
+      "orders-b",
+      "orders-a",
+      "orders-c",
+    ]);
+  });
+
+  it("draws only the pod itself without a deployment and caps siblings", () => {
+    const loose = listItem("loose");
+    expect(seriesPods(loose, [loose, listItem("other")])).toEqual([
+      { namespace: "shop", name: "loose" },
+    ]);
+    const item = listItem("orders-0", "orders");
+    const many = Array.from({ length: MAX_SERIES_SIBLINGS + 5 }, (_, index) =>
+      listItem(`orders-${index + 10}`, "orders"),
+    );
+    expect(seriesPods(item, [item, ...many])).toHaveLength(
+      MAX_SERIES_SIBLINGS + 1,
+    );
+  });
+});
+
+describe("podSeries", () => {
+  function record(
+    receivedAt: number,
+    values: StoredMetric[],
+    instanceId = "a",
+    ts = receivedAt - 100,
+  ): MetricsRecord {
+    return { pod: POD, instanceId, seq: receivedAt, ts, receivedAt, values };
+  }
+  const heap = (value: number): StoredMetric => ({
+    name: "runtime.heap.used_bytes",
+    kind: "gauge",
+    value,
+  });
+  const processed = (
+    value: number,
+    increase?: number,
+    reset?: true,
+  ): StoredMetric => ({
+    name: "app.orders.processed",
+    kind: "counter",
+    value,
+    ...(increase === undefined ? {} : { increase }),
+    ...(reset === undefined ? {} : { reset }),
+  });
+  const NAMES = ["runtime.heap.used_bytes", "app.orders.processed", "app.none"];
+
+  it("turns records into columns and counters into per-second increases", () => {
+    const series = podSeries(
+      POD,
+      [
+        record(10_000, [heap(5), processed(3)]),
+        record(15_000, [heap(6), processed(13, 10)]),
+        record(20_000, [processed(23, 10)]),
+      ],
+      NAMES,
+      15_000,
+    );
+    expect(series.times).toEqual([10_000, 15_000, 20_000]);
+    expect(series.values).toEqual([
+      [5, 6, null],
+      // 앞 점이 없으면 null, 그 뒤는 10 / 5초
+      [null, 2, 2],
+      [null, null, null],
+    ]);
+  });
+
+  it("breaks the line on a new instance and on a long silence", () => {
+    const series = podSeries(
+      POD,
+      [
+        record(10_000, [heap(5), processed(3)]),
+        // 3주기(15초)보다 오래 빔
+        record(40_000, [heap(6), processed(13, 10)]),
+        // 새 instance: counter는 리셋이라 null, 앞 instance의 시각과 견주지 않음
+        record(45_000, [heap(1), processed(2, 2, true)], "b"),
+        record(50_000, [heap(2), processed(4, 2)], "b"),
+      ],
+      NAMES.slice(0, 2),
+      15_000,
+    );
+    expect(series.times).toEqual([
+      10_000, 10_001, 40_000, 40_001, 45_000, 50_000,
+    ]);
+    expect(series.values).toEqual([
+      [5, null, 6, null, 1, 2],
+      [null, null, 1 / 3, null, null, 0.4],
+    ]);
+  });
+});
+
+describe("metricSeriesBody", () => {
+  it("reports the kind of each metric someone sent", () => {
+    const body = metricSeriesBody(
+      ["app.queue.length", "app.none"],
+      [
+        { pod: POD, records: [] },
+        {
+          pod: { namespace: "shop", name: "orders-2" },
+          records: [
+            {
+              pod: POD,
+              instanceId: "a",
+              seq: 1,
+              ts: 1,
+              receivedAt: 1,
+              values: [{ name: "app.queue.length", kind: "gauge", value: 3 }],
+            },
+          ],
+        },
+      ],
+      15_000,
+      NOW,
+      NOW - 1_800_000,
+    );
+    expect(body.metrics).toEqual([
+      { name: "app.queue.length", kind: "gauge" },
+      { name: "app.none" },
+    ]);
+    expect(body.pods.map((pod) => pod.pod.name)).toEqual([
+      "orders-1",
+      "orders-2",
+    ]);
+    expect(body.pods[1]?.values).toEqual([[3], [null]]);
+    expect(body).toMatchObject({ serverTime: NOW, since: NOW - 1_800_000 });
+  });
 });

@@ -87,6 +87,23 @@ export interface StatusChangeRecord {
   deployment?: string;
 }
 
+// 쿠버네티스가 Pod에 대해 남긴 Event(core/v1)입니다(docs/guides/T19.md 결정 8).
+// 같은 Event(uid)가 다시 오면(횟수가 늘어남) 바꿔 끼웁니다.
+export interface KubeEventRecord {
+  pod: PodRef;
+  uid: string;
+  // Normal 또는 Warning입니다.
+  type: string;
+  reason: string;
+  message?: string;
+  count: number;
+  // 쿠버네티스 시계입니다. 처음 일어난 시각(없을 수 있음)과 마지막으로 일어난 시각입니다.
+  firstAt?: number;
+  lastAt: number;
+  // 서버가 마지막으로 받은 시각입니다. 30분은 이것으로 셉니다.
+  receivedAt: number;
+}
+
 export interface PodRecords {
   // 받은 순서입니다.
   metrics: MetricsRecord[];
@@ -96,6 +113,8 @@ export interface PodRecords {
   deletions: DeletedPodRecord[];
   // 일어난 순서(at)입니다.
   statusChanges: StatusChangeRecord[];
+  // 마지막으로 일어난 순서(lastAt)입니다.
+  kubeEvents: KubeEventRecord[];
 }
 
 export interface StoreStats {
@@ -106,11 +125,13 @@ export interface StoreStats {
   connections: number;
   deletedPods: number;
   statusChanges: number;
+  kubeEvents: number;
   // 상한을 넘어 버린 수입니다(서버가 시작된 뒤 누적).
   droppedMetrics: number;
   droppedEvents: number;
   droppedConnections: number;
   droppedStatusChanges: number;
+  droppedKubeEvents: number;
 }
 
 export interface PruneResult {
@@ -125,6 +146,8 @@ export interface Store {
   addConnection(record: ConnectionRecord): Promise<void>;
   addDeletedPod(record: DeletedPodRecord): Promise<void>;
   addStatusChange(record: StatusChangeRecord): Promise<void>;
+  // 같은 Pod에 같은 uid의 기록이 있으면 바꿔 끼웁니다.
+  addKubeEvent(record: KubeEventRecord): Promise<void>;
   // since 이후(받은 시각, 연결·판단 변화는 at, 지워진 Pod는 deletedAt)의 Pod 하나의 기록입니다.
   podRecords(pod: PodRef, since: number): Promise<PodRecords>;
   // since 이후에 지워진 Pod입니다. 지워진 순서입니다.

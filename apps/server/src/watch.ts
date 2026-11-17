@@ -23,10 +23,13 @@ import type {
   ReplicaSetSummary,
   SetResult,
 } from "./cluster.js";
+import { kubeEventRecord } from "./kube-events.js";
 import { describeError } from "./kube.js";
 import type { KubeConnection } from "./kube.js";
 import { log } from "./log.js";
 import type { LogFields } from "./log.js";
+import { RETENTION_MS } from "./store/store.js";
+import type { KubeEventRecord } from "./store/store.js";
 
 // 실패한 watch를 다시 시작하기까지 기다리는 시간입니다. 1초부터 2배씩, 30초까지.
 const RETRY_BASE_MS = 1_000;
@@ -238,11 +241,14 @@ export class ClusterWatcher {
   private readonly resources: Startable[][] = [];
 
   // onPodDeleted는 Pod가 지워질 때 마지막 요약으로 부릅니다. 저장소가 30분 남깁니다(T11).
+  // onPodEvent는 Pod에 대한 쿠버네티스 Event를 받을 때마다 부릅니다(docs/guides/T19.md 결정 8).
   constructor(
     private readonly connection: KubeConnection,
     private readonly namespaces: readonly string[],
     private readonly state: ClusterState,
     onPodDeleted: (pod: PodSummary) => void = () => {},
+    onPodEvent: (event: KubeEventRecord) => void = () => {},
+    now: () => number = Date.now,
   ) {
     const core = connection.config.makeApiClient(CoreV1Api);
     const apps = connection.config.makeApiClient(AppsV1Api);
@@ -336,7 +342,8 @@ export class ClusterWatcher {
           },
         },
       );
-      // 이벤트는 들고 있지 않습니다(T11 결정 3, 보관은 T19). 처음 list는 synced 로그의 개수로만 남깁니다.
+      // Pod에 대한 이벤트는 저장소에 넘깁니다(T19 결정 8). 처음 list는 30분 안의 것만 넘기고,
+      // 로그는 synced 로그의 개수로만 남깁니다.
       const events = new WatchedResource<CoreV1Event>(
         connection,
         "events",
@@ -348,8 +355,16 @@ export class ClusterWatcher {
             if (synced) {
               log.info("kube event", eventLogFields(object));
             }
+            const receivedAt = now();
+            const record = kubeEventRecord(object, receivedAt);
+            if (
+              record !== undefined &&
+              (synced || record.lastAt >= receivedAt - RETENTION_MS)
+            ) {
+              onPodEvent(record);
+            }
           },
-          // 이벤트는 한 시간쯤 지나면 쿠버네티스가 지웁니다. 남기지 않습니다.
+          // 이벤트는 한 시간쯤 지나면 쿠버네티스가 지웁니다. 저장소의 기록은 30분 규칙대로 둡니다.
           remove: () => {},
         },
       );

@@ -1,148 +1,136 @@
-// Pod 상세 자리(분할 화면의 오른쪽)입니다. 상세 API(T14)와 snapshot API(T09)를 불러 원본 JSON과 오류를 그대로 보여 줍니다.
-// 머리줄의 판단 배지는 목록 스트림의 항목을 씁니다(docs/guides/T18.md 결정 20).
-// '무슨 일이 있었나', 지표 그래프, snapshot 표시는 T19에서 만듭니다.
-import type { PodDetailBody, SnapshotBody } from "@glasspod/protocol";
-import type { ReactNode } from "react";
+// Pod 상세 화면(분할 화면의 오른쪽)입니다(design.md 5.3, docs/guides/T19.md).
+// 머리줄, '무슨 일이 있었나', 지표 그래프, snapshot, 조치 기록 자리를 위에서 아래로 둡니다.
+// 판단 배지와 문장은 목록 스트림의 항목을 쓰고(없으면 상세 본문의 항목), 상세와 시계열은 그 항목이 바뀔 때 다시 받습니다.
+import type { PodRef } from "@glasspod/protocol";
+import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
-import type { ApiResult } from "../api/client.js";
-import { getPod, getSnapshot } from "../api/pods.js";
-import { useApiResult } from "../api/useApiResult.js";
+import { usePodDetail } from "../api/usePodDetail.js";
+import { DetailHeader } from "../detail/DetailHeader.js";
+import { MetricsPanel } from "../detail/MetricsPanel.js";
+import type { PeriodMinutes } from "../detail/MetricsPanel.js";
+import { SnapshotPanel } from "../detail/SnapshotPanel.js";
+import { WhatHappened } from "../detail/WhatHappened.js";
 import { overviewLink, useShell } from "../shell/shellContext.js";
-import { ChevronLeftIcon } from "../ui/icons.js";
-import { StatusBadge } from "../ui/StatusBadge.js";
-import { podSentence } from "../view/podText.js";
+import { HistoryIcon } from "../ui/icons.js";
 
 export function PodDetailPage() {
   // 라우트가 두 값을 모두 정하므로 비어 있을 수 없습니다.
   const { namespace = "", name = "" } = useParams();
   // filter는 목록에서 고른 namespace(주소의 ?namespace=)이고, namespace는 이 Pod의 namespace입니다.
   const { stream, namespace: filter, now } = useShell();
-  const item = stream.state?.list.pods.find(
-    (pod) => pod.pod.namespace === namespace && pod.pod.name === name,
+  const pod: PodRef = useMemo(() => ({ namespace, name }), [namespace, name]);
+  const streamItem = stream.state?.list.pods.find(
+    (item) => item.pod.namespace === namespace && item.pod.name === name,
   );
-  const key = JSON.stringify([namespace, name]);
-  const detail = useApiResult(key, (signal) =>
-    getPod({ namespace, name }, signal),
+  // 기간과 네 번째 그래프는 화면 상태입니다. Pod를 바꿔도 그대로 둡니다(결정 15, 16).
+  const [period, setPeriod] = useState<PeriodMinutes>(30);
+  const [selectedChart, setSelectedChart] = useState<string | undefined>(
+    undefined,
   );
-  const snapshot = useApiResult(key, (signal) =>
-    getSnapshot({ namespace, name }, signal),
-  );
+  const data = usePodDetail(pod, [streamItem, stream.opens], selectedChart);
+  const item = streamItem ?? data.detail?.item;
+  const podKey = JSON.stringify([namespace, name]);
 
   return (
-    <section className="space-y-6 px-6 py-8 lg:px-8">
-      <div className="space-y-2">
-        <Link
-          to={overviewLink(filter)}
-          className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-deep-teal"
-        >
-          <ChevronLeftIcon className="size-4" />
-          한눈에 보기로
-        </Link>
-        <div className="flex flex-wrap items-center gap-3">
-          {item !== undefined && <StatusBadge status={item.status} />}
-          <h1 className="font-mono text-xl font-semibold break-all text-slate-900">
-            {name}
-          </h1>
-        </div>
-        <p className="text-sm text-slate-600">
-          <span className="font-mono text-slate-500">{namespace}</span>
-          {item !== undefined && <> · {podSentence(item, now)}</>}
+    <div className="space-y-5 px-6 py-8 lg:px-8">
+      <DetailHeader pod={pod} item={item} now={now} filter={filter} />
+
+      {data.refreshFailure !== undefined && (
+        <p className="text-xs text-warning-ink">
+          상세를 새로 받지 못했습니다({data.refreshFailure.error}). 마지막으로
+          받은 내용입니다.
         </p>
-      </div>
+      )}
 
-      <Panel
-        title="상세"
-        loading={detail.loading}
-        reload={detail.reload}
-        loadingText="서버에서 불러오는 중입니다."
-      >
-        {detail.result !== undefined && (
-          <RawResult result={detail.result} summary={detailSummary} />
-        )}
-      </Panel>
+      {data.detail === undefined ? (
+        data.failure === undefined ? (
+          <p className="text-sm text-slate-500">서버에서 불러오는 중입니다.</p>
+        ) : (
+          <DetailFailure
+            status={data.failure.status}
+            error={data.failure.error}
+            detail={data.failure.detail}
+            filter={filter}
+            onReload={data.reload}
+          />
+        )
+      ) : (
+        <>
+          {item !== undefined && (
+            <WhatHappened detail={data.detail} item={item} />
+          )}
+          <MetricsPanel
+            detail={data.detail}
+            series={data.series}
+            seriesFailure={data.seriesFailure}
+            charts={data.charts}
+            hasSdk={item?.sdk !== undefined || data.detail.values.length > 0}
+            period={period}
+            onPeriodChange={setPeriod}
+            onChartChange={setSelectedChart}
+          />
+        </>
+      )}
 
-      <Panel
-        title="Snapshot"
-        loading={snapshot.loading}
-        reload={snapshot.reload}
-        loadingText="SDK에 묻는 중입니다. 앱이 답하지 않으면 5초 뒤에 끝납니다."
-      >
-        {snapshot.result !== undefined && (
-          <RawResult result={snapshot.result} summary={snapshotSummary} />
-        )}
-      </Panel>
-    </section>
-  );
-}
+      {/* 서버가 모르는 Pod에는 물을 SDK도 없습니다. */}
+      {data.failure?.error !== "pod-not-found" && (
+        <SnapshotPanel key={podKey} pod={pod} item={item} now={now} />
+      )}
 
-function detailSummary(body: PodDetailBody): string {
-  return `${body.item.status} · event ${body.events.length} · 지표 ${body.values.length}`;
-}
-
-function snapshotSummary(body: SnapshotBody): string {
-  return `${body.elapsedMs}ms · instance ${body.instanceId}`;
-}
-
-function Panel({
-  title,
-  loading,
-  reload,
-  loadingText,
-  children,
-}: {
-  title: string;
-  loading: boolean;
-  reload: () => void;
-  loadingText: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="space-y-3 rounded-xl border border-line bg-white p-4">
-      <div className="flex items-center justify-between gap-4">
-        <h2 className="font-semibold text-slate-800">{title}</h2>
-        <button
-          type="button"
-          onClick={reload}
-          disabled={loading}
-          className="rounded-md border border-glass-cyan px-3 py-1 text-sm text-deep-teal hover:bg-mist disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          다시 불러오기
-        </button>
-      </div>
-      <div aria-live="polite" aria-busy={loading}>
-        {loading && <p className="text-sm text-slate-500">{loadingText}</p>}
-        {children}
-      </div>
+      <section className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-line bg-white px-5 py-4">
+        <h2 className="flex items-center gap-2 text-[15px] font-bold text-slate-900">
+          <HistoryIcon className="size-4 text-glass-cyan" />
+          조치 기록
+        </h2>
+        <span className="text-[13px] text-slate-400">
+          조치 기능을 만든 뒤에 이 Pod의 조치가 보입니다.
+        </span>
+      </section>
     </div>
   );
 }
 
-function RawResult<T>({
-  result,
-  summary,
+function DetailFailure({
+  status,
+  error,
+  detail,
+  filter,
+  onReload,
 }: {
-  result: ApiResult<T>;
-  summary: (body: T) => string;
+  status: number;
+  error: string;
+  detail: string;
+  filter: string | undefined;
+  onReload: () => void;
 }) {
-  if (!result.ok) {
+  if (error === "pod-not-found") {
     return (
-      <div className="space-y-1 rounded-md border border-coral bg-coral/10 p-3">
-        <p className="font-mono text-sm font-medium text-slate-900">
-          {result.status === 0 ? "응답 없음" : `HTTP ${result.status}`} ·{" "}
-          {result.error}
+      <div className="rounded-xl border border-line bg-white px-5 py-5">
+        <p className="text-sm text-slate-700">
+          서버가 이 Pod를 모릅니다. 지워진 지 오래됐거나 이름이 틀렸습니다.
         </p>
-        <p className="text-sm break-words text-slate-700">{result.detail}</p>
+        <Link
+          to={overviewLink(filter)}
+          className="mt-2 inline-block text-sm text-deep-teal hover:underline"
+        >
+          한눈에 보기로 돌아갑니다
+        </Link>
       </div>
     );
   }
   return (
-    <div className="space-y-2">
-      <p className="font-mono text-sm text-slate-500">
-        HTTP {result.status} · {summary(result.data)}
+    <div className="space-y-2 rounded-xl border border-warning-line bg-warning-wash px-5 py-4">
+      <p className="font-mono text-sm font-medium text-slate-900">
+        {status === 0 ? "응답 없음" : `HTTP ${status}`} · {error}
       </p>
-      <pre className="max-h-[32rem] overflow-auto rounded-md bg-paper p-3 font-mono text-xs leading-relaxed text-slate-800">
-        {JSON.stringify(result.data, null, 2)}
-      </pre>
+      <p className="text-sm break-words text-slate-700">{detail}</p>
+      <button
+        type="button"
+        onClick={onReload}
+        className="rounded-md border border-glass-cyan bg-white px-3 py-1 text-sm text-deep-teal hover:bg-mist"
+      >
+        다시 불러오기
+      </button>
     </div>
   );
 }

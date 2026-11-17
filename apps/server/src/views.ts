@@ -3,13 +3,18 @@
 // 여기 함수는 시각을 인자로 받는 순수 함수입니다.
 import type {
   DeploymentItem,
+  MetricKind,
+  MetricSeriesBody,
   PodConnection,
   PodDetailBody,
   PodEvent,
   PodItem,
   PodKube,
+  PodKubeEvent,
   PodListMetrics,
+  PodMetricSeries,
   PodMetricValue,
+  PodRef,
   PodRestart,
   PodSdk,
   PodStatusChange,
@@ -24,6 +29,8 @@ import type { PodStatusEntry } from "./status-monitor.js";
 import type {
   ConnectionRecord,
   EventRecord,
+  KubeEventRecord,
+  MetricsRecord,
   PodRecords,
   StatusChangeRecord,
 } from "./store/store.js";
@@ -207,6 +214,18 @@ export function statusChangeItem(record: StatusChangeRecord): PodStatusChange {
   };
 }
 
+export function kubeEventItem(record: KubeEventRecord): PodKubeEvent {
+  return {
+    uid: record.uid,
+    type: record.type,
+    reason: record.reason,
+    ...(record.message === undefined ? {} : { message: record.message }),
+    count: record.count,
+    ...(record.firstAt === undefined ? {} : { firstAt: record.firstAt }),
+    lastAt: record.lastAt,
+  };
+}
+
 // 지금 instance의 마지막 값 전부, 이름순입니다.
 export function metricValues(app: AppState | undefined): PodMetricValue[] {
   if (app === undefined) {
@@ -242,6 +261,148 @@ export function podDetail(
         : pickRestartCauses(records.events, previousInstanceId).map(eventItem),
     connections: records.connections.map(connectionItem),
     statusChanges: records.statusChanges.map(statusChangeItem),
+    kubeEvents: records.kubeEvents.map(kubeEventItem),
+  };
+}
+
+// ── 그래프용 시계열(docs/guides/T19.md 결정 5, 6) ──
+
+// 한 번에 물을 수 있는 지표 수와, 함께 그릴 같은 Deployment의 다른 Pod 수입니다.
+export const MAX_SERIES_METRICS = 8;
+export const MAX_SERIES_SIBLINGS = 10;
+// 지표 이름 규칙입니다(sdk-message.schema.json의 MetricName).
+const METRIC_NAME = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/;
+
+export type MetricsQuery =
+  { ok: true; names: string[] } | { ok: false; detail: string };
+
+// ?metrics=a,b 쿼리입니다. 1~8개, 같은 이름은 하나로, 처음 나온 순서입니다.
+export function parseMetricsQuery(value: unknown): MetricsQuery {
+  if (typeof value !== "string" || value.trim() === "") {
+    return {
+      ok: false,
+      detail: "metrics must list 1 to 8 metric names separated by commas",
+    };
+  }
+  const names = [...new Set(value.split(",").map((name) => name.trim()))];
+  const bad = names.find((name) => !METRIC_NAME.test(name));
+  if (bad !== undefined) {
+    return {
+      ok: false,
+      detail: `metrics has an invalid metric name ${JSON.stringify(bad)}`,
+    };
+  }
+  if (names.length > MAX_SERIES_METRICS) {
+    return {
+      ok: false,
+      detail: `metrics may list at most ${MAX_SERIES_METRICS} names (got ${names.length})`,
+    };
+  }
+  return { ok: true, names };
+}
+
+// 그래프에 함께 그릴 Pod입니다. 이 Pod가 맨 앞, 그 뒤 같은 namespace·Deployment의 다른 Pod를 이름순으로 10개까지.
+export function seriesPods(item: PodItem, items: readonly PodItem[]): PodRef[] {
+  const siblings =
+    item.deployment === undefined
+      ? []
+      : items
+          .filter(
+            (other) =>
+              other.pod.namespace === item.pod.namespace &&
+              other.pod.name !== item.pod.name &&
+              other.deployment === item.deployment,
+          )
+          .map((other) => other.pod)
+          .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+          .slice(0, MAX_SERIES_SIBLINGS);
+  return [{ namespace: item.pod.namespace, name: item.pod.name }, ...siblings];
+}
+
+// Pod 하나의 시계열입니다. records는 받은 순서입니다.
+// gapMs보다 벌어졌거나 instance가 바뀐 곳에는 앞 점 1ms 뒤에 값이 모두 null인 시각을 넣어 선을 끊습니다.
+export function podSeries(
+  pod: PodRef,
+  records: readonly MetricsRecord[],
+  names: readonly string[],
+  gapMs: number,
+): PodMetricSeries {
+  const times: number[] = [];
+  const values: (number | null)[][] = names.map(() => []);
+  // counter마다 같은 instance에서 앞서 그 counter가 든 기록의 SDK 시각입니다.
+  const counterTs = new Map<string, number>();
+  let previous: MetricsRecord | undefined;
+  for (const record of records) {
+    if (previous !== undefined) {
+      const newInstance = record.instanceId !== previous.instanceId;
+      if (newInstance || record.receivedAt - previous.receivedAt > gapMs) {
+        times.push(previous.receivedAt + 1);
+        for (const column of values) {
+          column.push(null);
+        }
+      }
+      if (newInstance) {
+        counterTs.clear();
+      }
+    }
+    times.push(record.receivedAt);
+    names.forEach((name, index) => {
+      const metric = record.values.find((value) => value.name === name);
+      const column = values[index] as (number | null)[];
+      if (metric === undefined) {
+        column.push(null);
+        return;
+      }
+      if (metric.kind === "gauge") {
+        column.push(metric.value);
+        return;
+      }
+      const before = counterTs.get(name);
+      counterTs.set(name, record.ts);
+      column.push(
+        metric.reset === true ||
+          metric.increase === undefined ||
+          before === undefined ||
+          record.ts <= before
+          ? null
+          : metric.increase / ((record.ts - before) / 1000),
+      );
+    });
+    previous = record;
+  }
+  return {
+    pod: { namespace: pod.namespace, name: pod.name },
+    times,
+    values,
+  };
+}
+
+// 시계열 본문입니다. pods는 seriesPods 순서, records는 그 Pod마다 since 이후의 지표 기록입니다.
+export function metricSeriesBody(
+  names: readonly string[],
+  pods: readonly { pod: PodRef; records: readonly MetricsRecord[] }[],
+  gapMs: number,
+  serverTime: number,
+  since: number,
+): MetricSeriesBody {
+  const kinds = new Map<string, MetricKind>();
+  for (const { records } of pods) {
+    for (const record of records) {
+      for (const value of record.values) {
+        if (!kinds.has(value.name) && names.includes(value.name)) {
+          kinds.set(value.name, value.kind);
+        }
+      }
+    }
+  }
+  return {
+    serverTime,
+    since,
+    metrics: names.map((name) => {
+      const kind = kinds.get(name);
+      return kind === undefined ? { name } : { name, kind };
+    }),
+    pods: pods.map(({ pod, records }) => podSeries(pod, records, names, gapMs)),
   };
 }
 

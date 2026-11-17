@@ -7,6 +7,7 @@ import type {
   ConnectionRecord,
   DeletedPodRecord,
   EventRecord,
+  KubeEventRecord,
   MetricsRecord,
   PodRecords,
   PruneResult,
@@ -21,8 +22,11 @@ export const MAX_EVENTS_PER_POD = 500;
 export const MAX_CONNECTIONS_PER_POD = 500;
 // 판단은 1초마다 바뀔 수 있어 30분이면 1,800건이 될 수 있습니다. 오래된 것부터 버립니다(docs/guides/T14.md 결정 3).
 export const MAX_STATUS_CHANGES_PER_POD = 500;
+// 쿠버네티스 Event는 같은 것을 바꿔 끼우므로 Pod마다 몇십 개를 넘지 않습니다(docs/guides/T19.md 결정 8).
+export const MAX_KUBE_EVENTS_PER_POD = 200;
 
-type LimitedKind = "metrics" | "events" | "connections" | "statusChanges";
+type LimitedKind =
+  "metrics" | "events" | "connections" | "statusChanges" | "kubeEvents";
 
 interface Bucket {
   pod: PodRef;
@@ -32,6 +36,8 @@ interface Bucket {
   connections: ConnectionRecord[];
   deletions: DeletedPodRecord[];
   statusChanges: StatusChangeRecord[];
+  // 받은 순서(receivedAt)입니다. 바꿔 끼운 것은 맨 뒤로 옮깁니다.
+  kubeEvents: KubeEventRecord[];
   // 상한을 넘었다고 이미 경고한 기록 종류입니다.
   warned: Set<LimitedKind>;
 }
@@ -44,6 +50,7 @@ export class MemoryStore implements Store {
     events: 0,
     connections: 0,
     statusChanges: 0,
+    kubeEvents: 0,
   };
 
   async addMetrics(record: MetricsRecord): Promise<void> {
@@ -83,6 +90,23 @@ export class MemoryStore implements Store {
     );
   }
 
+  async addKubeEvent(record: KubeEventRecord): Promise<void> {
+    const bucket = this.bucket(record.pod);
+    const index = bucket.kubeEvents.findIndex(
+      (item) => item.uid === record.uid,
+    );
+    if (index >= 0) {
+      bucket.kubeEvents.splice(index, 1);
+    }
+    this.push(
+      bucket,
+      "kubeEvents",
+      bucket.kubeEvents,
+      record,
+      MAX_KUBE_EVENTS_PER_POD,
+    );
+  }
+
   async podRecords(pod: PodRef, since: number): Promise<PodRecords> {
     const bucket = this.buckets.get(podKey(pod));
     if (bucket === undefined) {
@@ -92,6 +116,7 @@ export class MemoryStore implements Store {
         connections: [],
         deletions: [],
         statusChanges: [],
+        kubeEvents: [],
       };
     }
     return {
@@ -105,6 +130,9 @@ export class MemoryStore implements Store {
       statusChanges: bucket.statusChanges.filter(
         (record) => record.at >= since,
       ),
+      kubeEvents: bucket.kubeEvents
+        .filter((record) => record.receivedAt >= since)
+        .sort((a, b) => a.lastAt - b.lastAt),
     };
   }
 
@@ -147,10 +175,12 @@ export class MemoryStore implements Store {
       connections: 0,
       deletedPods: 0,
       statusChanges: 0,
+      kubeEvents: 0,
       droppedMetrics: this.dropped.metrics,
       droppedEvents: this.dropped.events,
       droppedConnections: this.dropped.connections,
       droppedStatusChanges: this.dropped.statusChanges,
+      droppedKubeEvents: this.dropped.kubeEvents,
     };
     for (const bucket of this.buckets.values()) {
       stats.metrics += bucket.metrics.length;
@@ -158,6 +188,7 @@ export class MemoryStore implements Store {
       stats.connections += bucket.connections.length;
       stats.deletedPods += bucket.deletions.length;
       stats.statusChanges += bucket.statusChanges.length;
+      stats.kubeEvents += bucket.kubeEvents.length;
     }
     return stats;
   }
@@ -170,12 +201,14 @@ export class MemoryStore implements Store {
       dropBefore(bucket.connections, (record) => record.at, before);
       dropBefore(bucket.deletions, (record) => record.deletedAt, before);
       dropBefore(bucket.statusChanges, (record) => record.at, before);
+      dropBefore(bucket.kubeEvents, (record) => record.receivedAt, before);
       if (
         bucket.metrics.length === 0 &&
         bucket.events.length === 0 &&
         bucket.connections.length === 0 &&
         bucket.deletions.length === 0 &&
-        bucket.statusChanges.length === 0
+        bucket.statusChanges.length === 0 &&
+        bucket.kubeEvents.length === 0
       ) {
         this.buckets.delete(key);
         expiredPods.push(bucket.pod);
@@ -199,6 +232,7 @@ export class MemoryStore implements Store {
         connections: [],
         deletions: [],
         statusChanges: [],
+        kubeEvents: [],
         warned: new Set(),
       };
       this.buckets.set(key, bucket);

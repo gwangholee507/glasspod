@@ -220,6 +220,19 @@ export interface PodConnection {
   code?: number;
 }
 
+// 쿠버네티스가 Pod에 대해 남긴 Event(core/v1)입니다(docs/guides/T19.md 결정 8). 같은 Event는 count만 늘어납니다.
+export interface PodKubeEvent {
+  uid: string;
+  // Normal 또는 Warning입니다.
+  type: string;
+  reason: string;
+  message?: string;
+  count: number;
+  // 쿠버네티스 시계입니다. 처음 일어난 시각(없을 수 있음)과 마지막으로 일어난 시각입니다.
+  firstAt?: number;
+  lastAt: number;
+}
+
 // GET /api/pods/:namespace/:name 본문입니다. 기록은 최근 30분입니다.
 export interface PodDetailBody {
   serverTime: number;
@@ -232,6 +245,36 @@ export interface PodDetailBody {
   restartCauses: PodEvent[];
   connections: PodConnection[];
   statusChanges: PodStatusChange[];
+  // 이 Pod에 대한 쿠버네티스 Event입니다. 마지막으로 일어난 순서입니다(T19).
+  kubeEvents: PodKubeEvent[];
+}
+
+// ── 그래프용 시계열(docs/guides/T19.md 결정 5, 6) ──
+
+// 요청한 지표입니다. 어느 Pod도 그 지표를 보내지 않았으면 kind가 없습니다.
+export interface SeriesMetric {
+  name: string;
+  kind?: MetricKind;
+}
+
+// Pod 하나의 시계열입니다. values[i][j]는 metrics[i]의 times[j] 값입니다.
+// 그 기록에 없는 지표는 null입니다. 끊긴 곳(instance가 바뀜, 또는 3주기보다 오래 빔)에는 값이 모두 null인 시각이 하나 들어 있습니다.
+// counter는 같은 instance의 앞 점과 견준 초당 증가량이고, 앞 점이 없거나 리셋이면 null입니다.
+export interface PodMetricSeries {
+  pod: PodRef;
+  // 서버가 받은 시각, 오래된 것부터입니다.
+  times: number[];
+  values: (number | null)[][];
+}
+
+// GET /api/pods/:namespace/:name/series?metrics=a,b 본문입니다.
+export interface MetricSeriesBody {
+  serverTime: number;
+  // 기간의 시작(서버 시계)입니다. serverTime - 30분입니다.
+  since: number;
+  metrics: SeriesMetric[];
+  // 이 Pod가 맨 앞, 그 뒤 같은 Deployment의 다른 Pod(이름순, 10개까지)입니다.
+  pods: PodMetricSeries[];
 }
 
 // SSE(GET /api/stream)의 이벤트 이름입니다. 처음에 pods 한 번, 그 뒤 바뀐 것이 있을 때마다 changes입니다.
