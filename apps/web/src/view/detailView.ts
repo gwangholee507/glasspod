@@ -9,6 +9,12 @@ import type {
   PodMetricValue,
   PodStatus,
 } from "@glasspod/protocol";
+import {
+  ACTION_LABEL,
+  actionSentence,
+  actionTone,
+  actorLabel,
+} from "./actionText.js";
 import { changeSentence, formatMs, statusTone } from "./podText.js";
 import type { Tone } from "./podText.js";
 
@@ -34,7 +40,7 @@ export function refreshDelayMs(
 export const WHAT_HAPPENED_LIMIT = 100;
 
 export type TimelineKind =
-  "event" | "kube" | "connection" | "status" | "restart";
+  "event" | "kube" | "connection" | "status" | "restart" | "action";
 
 export interface TimelineRow {
   key: string;
@@ -42,7 +48,7 @@ export interface TimelineRow {
   at: number;
   kind: TimelineKind;
   tone: Tone;
-  // 줄 앞의 작은 글(error, warn, info, 쿠버네티스, SDK, 판단)입니다.
+  // 줄 앞의 작은 글(error, warn, info, 쿠버네티스, SDK, 판단, 조치)입니다.
   label: string;
   title: string;
   // 아랫줄입니다. 없으면 감춥니다.
@@ -132,13 +138,25 @@ function eventRow(
 }
 
 // 상세 본문과 목록 항목으로 '무슨 일이 있었나' 줄을 만듭니다. 늦은 것부터 limit줄까지입니다.
-// 같은 시각이면 재시작 → 쿠버네티스 → 판단 → 연결 → event 순서입니다.
+// 같은 시각이면 조치 → 재시작 → 쿠버네티스 → 판단 → 연결 → event 순서입니다.
+// 조치는 30분이 지나도 상세 본문에 남아 있으므로 그 줄도 그대로 보입니다(docs/guides/T21.md 결정 21).
 export function whatHappened(
   detail: PodDetailBody,
   item: PodItem,
   limit = WHAT_HAPPENED_LIMIT,
 ): { rows: TimelineRow[]; truncated: boolean } {
   const rows: TimelineRow[] = [];
+  for (const action of detail.actions) {
+    rows.push({
+      key: `action/${action.id}`,
+      at: action.requestedAt,
+      kind: "action",
+      tone: actionTone(action),
+      label: "조치",
+      title: `${ACTION_LABEL[action.action]} · ${actorLabel(action.actor)}`,
+      detail: actionSentence(action),
+    });
+  }
   const restart = item.restart;
   if (restart?.reason !== undefined) {
     const exit =

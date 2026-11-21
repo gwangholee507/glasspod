@@ -2,6 +2,7 @@
 // 서버 안의 모델(쿠버네티스 요약, SDK 지금 상태, 저장소 기록, 판단)을 @glasspod/protocol의 HTTP 본문 타입으로 바꿉니다.
 // 여기 함수는 시각을 인자로 받는 순수 함수입니다.
 import type {
+  ActionItem,
   DeploymentItem,
   MetricKind,
   MetricSeriesBody,
@@ -242,12 +243,13 @@ export function metricValues(app: AppState | undefined): PodMetricValue[] {
     }));
 }
 
-// 상세 본문입니다(결정 13). records는 그 Pod의 최근 30분 기록입니다.
+// 상세 본문입니다(결정 13). records는 그 Pod의 최근 30분 기록, actions는 그 Pod에 한 조치 전부입니다(T21 결정 11).
 export function podDetail(
   item: PodItem,
   app: AppState | undefined,
   records: PodRecords,
   serverTime: number,
+  actions: readonly ActionItem[] = [],
 ): PodDetailBody {
   const previousInstanceId = item.restart?.previousInstanceId;
   return {
@@ -262,6 +264,7 @@ export function podDetail(
     connections: records.connections.map(connectionItem),
     statusChanges: records.statusChanges.map(statusChangeItem),
     kubeEvents: records.kubeEvents.map(kubeEventItem),
+    actions: [...actions],
   };
 }
 

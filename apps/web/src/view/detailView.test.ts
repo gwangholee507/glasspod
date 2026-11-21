@@ -81,6 +81,7 @@ function detail(fields: Partial<PodDetailBody> = {}): PodDetailBody {
     connections: [],
     statusChanges: [],
     kubeEvents: [],
+    actions: [],
     ...fields,
   };
 }
@@ -230,6 +231,40 @@ describe("whatHappened", () => {
     );
     expect(rows.map((row) => row.at)).toEqual([4, 3, 2]);
     expect(truncated).toBe(true);
+  });
+
+  it("adds a row for each action on this pod", () => {
+    const body = detail({
+      actions: [
+        {
+          id: "a1",
+          action: "restart-pod",
+          target: {
+            kind: "pod",
+            namespace: "shop",
+            name: "orders-1",
+            uid: "u",
+          },
+          actor: { kind: "user" },
+          requestedAt: 50_000,
+          finishedAt: 50_100,
+          result: "failed",
+          error: "target-changed",
+          kubeStatus: 409,
+        },
+      ],
+    });
+    const [row] = whatHappened(body, item()).rows;
+    expect(row).toEqual({
+      key: "action/a1",
+      at: 50_000,
+      kind: "action",
+      tone: "warning",
+      label: "조치",
+      title: "Pod 재시작 · 개발자",
+      detail:
+        "HTTP 409 · 같은 이름의 다른 Pod로 바뀌었습니다. 목록을 다시 보고 실행합니다.",
+    });
   });
 });
 

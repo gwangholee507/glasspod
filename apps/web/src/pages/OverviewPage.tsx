@@ -1,16 +1,29 @@
 // 오른쪽 자리, Pod를 고르기 전입니다: Deployment별 요약과 최근 30분 판단 변화(design.md 5.3, docs/guides/T18.md 결정 17, 18).
-import type { PodStatusChange, StatusChangesBody } from "@glasspod/protocol";
+// 타임라인에는 조치도 섞습니다(docs/guides/T21.md 결정 21).
+import type {
+  ActionItem,
+  PodStatusChange,
+  StatusChangesBody,
+} from "@glasspod/protocol";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import type { ApiResult } from "../api/client.js";
 import { getStatusChanges } from "../api/pods.js";
+import { useActionHistory } from "../api/useActionHistory.js";
+import { ResultBadge } from "../actions/ActionParts.js";
 import { podLink, useShell } from "../shell/shellContext.js";
 import { ChevronRightIcon, ClockIcon, HexagonIcon } from "../ui/icons.js";
 import { StatusBadge, TONE_BAR, TONE_DOT } from "../ui/StatusBadge.js";
+import {
+  ACTION_LABEL,
+  actionSentence,
+  actionTone,
+  actorLabel,
+} from "../view/actionText.js";
 import { changeSentence, formatClock, statusTone } from "../view/podText.js";
 import {
   TIMELINE_LIMIT,
-  mergeStatusChanges,
+  mergeOverviewTimeline,
   summarizeDeployments,
 } from "../view/podView.js";
 import type { DeploymentSummary } from "../view/podView.js";
@@ -24,17 +37,23 @@ export function OverviewPage() {
   const { stream, namespace, now } = useShell();
   const list = stream.state?.list;
   const timeline = useStatusTimeline(namespace, stream.opens);
+  const history = useActionHistory(
+    namespace,
+    stream.opens,
+    stream.state?.actions ?? [],
+  );
 
   const showNamespace =
     namespace === undefined &&
     new Set(list?.pods.map((item) => item.pod.namespace) ?? []).size > 1;
   const summaries =
     list === undefined ? [] : summarizeDeployments(list.deployments, list.pods);
-  const { changes, truncated } = mergeStatusChanges(
+  const { entries, truncated } = mergeOverviewTimeline(
     [
       timeline?.result.ok === true ? timeline.result.data.changes : [],
       stream.state?.statusChanges ?? [],
     ],
+    history.actions,
     now,
   );
 
@@ -79,9 +98,11 @@ export function OverviewPage() {
             className="flex items-center gap-2 text-[17px] font-bold text-slate-900"
           >
             <ClockIcon className="size-4 text-glass-cyan" />
-            최근 30분 판단 변화
+            최근 30분 판단 변화와 조치
           </h2>
-          <span className="text-xs text-slate-500">판단이 바뀌면 한 줄</span>
+          <span className="text-xs text-slate-500">
+            판단이 바뀌거나 조치하면 한 줄
+          </span>
         </div>
         {timeline !== undefined && !timeline.result.ok && (
           <p className="mt-3 text-xs text-warning-ink">
@@ -89,22 +110,31 @@ export function OverviewPage() {
             연 뒤의 변화만 보입니다.
           </p>
         )}
-        {changes.length === 0 ? (
+        {entries.length === 0 ? (
           <p className="mt-4 text-sm text-slate-500">
             {timeline === undefined
               ? "기록을 불러오는 중입니다."
-              : "최근 30분 동안 판단이 바뀌지 않았습니다."}
+              : "최근 30분 동안 판단이 바뀌지 않았고 조치도 없었습니다."}
           </p>
         ) : (
           <ol className="mt-4">
-            {changes.map((change) => (
-              <TimelineRow
-                key={`${change.pod.namespace}/${change.pod.name}/${change.at}/${change.status}`}
-                change={change}
-                namespace={namespace}
-                showNamespace={showNamespace}
-              />
-            ))}
+            {entries.map((entry) =>
+              entry.kind === "action" ? (
+                <ActionTimelineRow
+                  key={`action/${entry.action.id}`}
+                  action={entry.action}
+                  namespace={namespace}
+                  showNamespace={showNamespace}
+                />
+              ) : (
+                <TimelineRow
+                  key={`${entry.change.pod.namespace}/${entry.change.pod.name}/${entry.change.at}/${entry.change.status}`}
+                  change={entry.change}
+                  namespace={namespace}
+                  showNamespace={showNamespace}
+                />
+              ),
+            )}
           </ol>
         )}
         {truncated && (
@@ -235,6 +265,60 @@ function TimelineRow({
         </div>
         <p className="mt-1.5 text-[13px] text-slate-700">
           {changeSentence(change)}
+        </p>
+      </div>
+    </li>
+  );
+}
+
+// 조치 한 줄입니다(docs/guides/T21.md 결정 21). 판단 변화 줄과 같은 칸에 대상, 조치, 결과를 둡니다.
+function ActionTimelineRow({
+  action,
+  namespace,
+  showNamespace,
+}: {
+  action: ActionItem;
+  namespace: string | undefined;
+  showNamespace: boolean;
+}) {
+  return (
+    <li className="group grid grid-cols-[4.25rem_0.75rem_minmax(0,1fr)] gap-x-3">
+      <time
+        dateTime={new Date(action.requestedAt).toISOString()}
+        className="pt-0.5 font-mono text-xs text-slate-500"
+      >
+        {formatClock(action.requestedAt)}
+      </time>
+      <div className="relative flex justify-center">
+        <span
+          className={`relative z-10 mt-1.5 size-2.5 rounded-full ${TONE_DOT[actionTone(action)]}`}
+          aria-hidden="true"
+        />
+        <span
+          className="absolute top-4 -bottom-1.5 w-px bg-line group-last:hidden"
+          aria-hidden="true"
+        />
+      </div>
+      <div className="pb-5 group-last:pb-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            to={podLink(action.target, namespace)}
+            className="font-mono text-xs break-all text-deep-teal hover:underline"
+          >
+            {showNamespace ? `${action.target.namespace}/` : ""}
+            {action.target.name}
+          </Link>
+          <span className="text-[13px] font-semibold text-slate-800">
+            {ACTION_LABEL[action.action]} · {actorLabel(action.actor)}
+          </span>
+          <ResultBadge item={action} />
+        </div>
+        <p
+          className={`mt-1.5 text-[13px] ${
+            action.result === "failed" ? "text-warning-ink" : "text-slate-700"
+          }`}
+        >
+          {actionSentence(action)}
         </p>
       </div>
     </li>

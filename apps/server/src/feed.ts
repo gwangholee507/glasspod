@@ -1,6 +1,7 @@
 // 판단 주기마다 목록(Pod 항목, Deployment 항목, namespace)을 다시 만들고 앞 주기와 비교해 바뀐 것을 계산합니다
 // (docs/guides/T14.md 결정 2, 16). 목록 GET과 SSE의 처음 pods는 이 마지막 주기의 값입니다.
 import type {
+  ActionItem,
   DeploymentItem,
   PodItem,
   PodListBody,
@@ -20,6 +21,8 @@ export interface PodFeedOptions {
   cluster: ClusterState;
   // GLASSPOD_NAMESPACES입니다. namespace 목록의 앞에 이 순서대로 둡니다.
   namespaces: readonly string[];
+  // GLASSPOD_ACTION_NAMESPACES입니다. 목록 본문에 그대로 넣습니다(docs/guides/T21.md 결정 12).
+  actionNamespaces?: readonly string[];
   now?: () => number;
 }
 
@@ -42,7 +45,10 @@ export class PodFeed {
   private readonly apps: AppStates;
   private readonly cluster: ClusterState;
   private readonly watched: readonly string[];
+  private readonly actionNamespaces: readonly string[];
   private readonly now: () => number;
+  // 앞 주기 뒤에 끝난 조치입니다. 다음 refresh의 changes에 넣고 비웁니다.
+  private pendingActions: ActionItem[] = [];
   private pods = new Map<string, Tracked<PodItem>>();
   private deployments = new Map<string, Tracked<DeploymentItem>>();
   private namespaces: string[];
@@ -53,9 +59,15 @@ export class PodFeed {
     this.apps = options.apps;
     this.cluster = options.cluster;
     this.watched = options.namespaces;
+    this.actionNamespaces = options.actionNamespaces ?? [];
     this.now = options.now ?? Date.now;
     this.namespaces = [...this.watched];
     this.serverTime = this.now();
+  }
+
+  // 끝난 조치를 다음 판단 주기의 changes로 보내도록 넣어 둡니다.
+  queueAction(item: ActionItem): void {
+    this.pendingActions.push(item);
   }
 
   // 판단(StatusMonitor.evaluate) 바로 뒤에 부릅니다. statusChanges는 evaluate가 돌려준 판단 변화입니다.
@@ -95,7 +107,9 @@ export class PodFeed {
         (item) => ({ namespace: item.namespace, name: item.name }),
       ),
       statusChanges: statusChanges.map(statusChangeItem),
+      actions: this.pendingActions,
     };
+    this.pendingActions = [];
 
     const namespaces = this.namespaceList(entries.map((entry) => entry.pod));
     if (namespaces.join("\n") !== this.namespaces.join("\n")) {
@@ -125,6 +139,7 @@ export class PodFeed {
     return {
       serverTime: this.serverTime,
       namespaces: [...this.namespaces],
+      actionNamespaces: [...this.actionNamespaces],
       deployments,
       pods,
     };
@@ -198,6 +213,9 @@ export function filterChanges(
           statusChanges: changes.statusChanges.filter(
             (change) => change.pod.namespace === namespace,
           ),
+          actions: changes.actions.filter(
+            (item) => item.target.namespace === namespace,
+          ),
           ...(changes.namespaces === undefined
             ? {}
             : { namespaces: changes.namespaces }),
@@ -208,6 +226,7 @@ export function filterChanges(
     filtered.deployments.length === 0 &&
     filtered.removedDeployments.length === 0 &&
     filtered.statusChanges.length === 0 &&
+    filtered.actions.length === 0 &&
     filtered.namespaces === undefined;
   return empty ? undefined : filtered;
 }

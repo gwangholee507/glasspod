@@ -1,4 +1,4 @@
-import type { HelloMessage, PodRef } from "@glasspod/protocol";
+import type { ActionItem, HelloMessage, PodRef } from "@glasspod/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClusterState } from "./cluster.js";
 import type { PodSummary } from "./cluster.js";
@@ -161,6 +161,49 @@ describe("PodFeed", () => {
   });
 });
 
+function action(namespace: string, name: string): ActionItem {
+  return {
+    id: `a-${namespace}-${name}`,
+    action: "restart-pod",
+    target: { kind: "pod", namespace, name, uid: `uid-${name}` },
+    actor: { kind: "user" },
+    requestedAt: 1,
+    finishedAt: 2,
+    result: "succeeded",
+  };
+}
+
+describe("PodFeed actions", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("sends a finished action once in the next changes", () => {
+    const { feed, tick } = setup();
+    tick();
+    feed.queueAction(action("shop", "orders-1"));
+    expect(tick().actions.map((item) => item.id)).toEqual(["a-shop-orders-1"]);
+    expect(tick().actions).toEqual([]);
+  });
+
+  it("lists the action namespaces", () => {
+    const { statuses, apps, cluster } = setup();
+    const feed = new PodFeed({
+      statuses,
+      apps,
+      cluster,
+      namespaces: ["shop", "pay"],
+      actionNamespaces: ["shop"],
+    });
+    expect(feed.list().actionNamespaces).toEqual(["shop"]);
+    expect(feed.list("pay").actionNamespaces).toEqual(["shop"]);
+  });
+});
+
 describe("filterChanges", () => {
   const base = {
     serverTime: 1,
@@ -169,6 +212,7 @@ describe("filterChanges", () => {
     deployments: [],
     removedDeployments: [],
     statusChanges: [],
+    actions: [],
   };
 
   it("keeps only the namespace and drops empty changes", () => {
@@ -185,6 +229,17 @@ describe("filterChanges", () => {
     expect(filterChanges(changes, "else")).toBeUndefined();
     expect(filterChanges(changes, undefined)).toBe(changes);
     expect(filterChanges(base, undefined)).toBeUndefined();
+  });
+
+  it("keeps only the actions of the namespace", () => {
+    const changes = {
+      ...base,
+      actions: [action("shop", "a"), action("pay", "b")],
+    };
+    expect(
+      filterChanges(changes, "shop")?.actions.map((item) => item.id),
+    ).toEqual(["a-shop-a"]);
+    expect(filterChanges(changes, "else")).toBeUndefined();
   });
 
   it("always passes a new namespace list", () => {

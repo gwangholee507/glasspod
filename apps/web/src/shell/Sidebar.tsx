@@ -1,4 +1,5 @@
 // 왼쪽 메뉴입니다: 로고, namespace 고르기, 메뉴, 실시간 연결 상태(docs/guides/T18.md 결정 2, 3, 6, 19).
+// '조치 기록'은 /actions로 갑니다(docs/guides/T21.md 결정 19). '격리된 Pod'는 T23까지 '준비 중'입니다.
 import type { ReactNode } from "react";
 import { Link } from "react-router";
 import type { PodStreamStatus } from "../api/podStream.js";
@@ -9,7 +10,15 @@ import {
   ListIcon,
 } from "../ui/icons.js";
 import { formatDuration } from "../view/podText.js";
-import { overviewLink } from "./shellContext.js";
+import { actionsLink, overviewLink } from "./shellContext.js";
+
+// 지금 고른 메뉴입니다.
+export type SidebarSection = "pods" | "actions";
+
+const MENU_CURRENT =
+  "flex items-center gap-3 rounded-lg bg-mist px-3 py-2 font-semibold text-deep-teal";
+const MENU_OTHER =
+  "flex items-center gap-3 rounded-lg px-3 py-2 text-slate-700 hover:bg-tab";
 
 const STATUS_TEXT: Record<PodStreamStatus, string> = {
   connecting: "연결하는 중입니다",
@@ -30,6 +39,7 @@ export function Sidebar({
   podCount,
   streamStatus,
   sinceUpdateMs,
+  current,
 }: {
   namespace: string | undefined;
   // 서버가 알려 준 namespace입니다. 아직 받지 못했으면 비어 있습니다.
@@ -38,6 +48,7 @@ export function Sidebar({
   podCount: number | undefined;
   streamStatus: PodStreamStatus;
   sinceUpdateMs: number | undefined;
+  current: SidebarSection;
 }) {
   // 주소에만 있는 이름(서버가 아직 모르는 namespace)도 고른 값으로 보여 줍니다.
   const options =
@@ -81,8 +92,8 @@ export function Sidebar({
       <nav aria-label="메뉴" className="flex flex-col gap-1 text-sm">
         <Link
           to={overviewLink(namespace)}
-          aria-current="page"
-          className="flex items-center gap-3 rounded-lg bg-mist px-3 py-2 font-semibold text-deep-teal"
+          aria-current={current === "pods" ? "page" : undefined}
+          className={current === "pods" ? MENU_CURRENT : MENU_OTHER}
         >
           <ListIcon />
           <span className="flex-1">Pod</span>
@@ -91,7 +102,14 @@ export function Sidebar({
           )}
         </Link>
         <ComingSoon icon={<IsolateIcon />} label="격리된 Pod" />
-        <ComingSoon icon={<HistoryIcon />} label="조치 기록" />
+        <Link
+          to={actionsLink(namespace)}
+          aria-current={current === "actions" ? "page" : undefined}
+          className={current === "actions" ? MENU_CURRENT : MENU_OTHER}
+        >
+          <HistoryIcon />
+          <span className="flex-1">조치 기록</span>
+        </Link>
       </nav>
 
       <div

@@ -50,6 +50,10 @@ spec:
             # watch할 namespace입니다. 여기에 더한 namespace마다 rbac-<namespace>.yaml의 Role도 있어야 합니다.
             - name: GLASSPOD_NAMESPACES
               value: glasspod-demo
+            # 조치할 namespace입니다. GLASSPOD_NAMESPACES 안에 있어야 하고, rbac-<namespace>.yaml의 Role에 조치 권한이 있어야 합니다.
+            # 지우면 조치가 모두 꺼집니다(docs/guides/T21.md 결정 2).
+            - name: GLASSPOD_ACTION_NAMESPACES
+              value: glasspod-demo
           # readiness만 둡니다. 서버는 기록을 메모리에 들고 있어 재시작하면 사라지므로 쿠버네티스가 재시작하지 않게 합니다
           # (2026-11-14 사용자 결정). 준비되기 전에는 Service가 SDK 연결을 보내지 않습니다.
           # 서버는 포트를 열기까지 약 1초 걸립니다(client-node 불러오기). 그 전에 묻지 않게 2초 기다려

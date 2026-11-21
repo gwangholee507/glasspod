@@ -1,17 +1,24 @@
 // Pod 상세 화면(분할 화면의 오른쪽)입니다(design.md 5.3, docs/guides/T19.md).
-// 머리줄, '무슨 일이 있었나', 지표 그래프, snapshot, 조치 기록 자리를 위에서 아래로 둡니다.
+// 머리줄, '무슨 일이 있었나', 지표 그래프, snapshot, 조치 기록을 위에서 아래로 둡니다.
 // 판단 배지와 문장은 목록 스트림의 항목을 쓰고(없으면 상세 본문의 항목), 상세와 시계열은 그 항목이 바뀔 때 다시 받습니다.
+// '재시작'을 누르면 오른쪽 서랍에서 확인한 뒤 실행합니다(docs/guides/T21.md).
 import type { PodRef } from "@glasspod/protocol";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
+import { RestartDrawer } from "../actions/RestartDrawer.js";
 import { usePodDetail } from "../api/usePodDetail.js";
+import { ActionHistory } from "../detail/ActionHistory.js";
 import { DetailHeader } from "../detail/DetailHeader.js";
 import { MetricsPanel } from "../detail/MetricsPanel.js";
 import type { PeriodMinutes } from "../detail/MetricsPanel.js";
 import { SnapshotPanel } from "../detail/SnapshotPanel.js";
 import { WhatHappened } from "../detail/WhatHappened.js";
 import { overviewLink, useShell } from "../shell/shellContext.js";
-import { HistoryIcon } from "../ui/icons.js";
+import {
+  isActionOn,
+  mergeActions,
+  restartBlockReason,
+} from "../view/actionText.js";
 
 export function PodDetailPage() {
   // 라우트가 두 값을 모두 정하므로 비어 있을 수 없습니다.
@@ -31,9 +38,41 @@ export function PodDetailPage() {
   const item = streamItem ?? data.detail?.item;
   const podKey = JSON.stringify([namespace, name]);
 
+  // 열린 서랍입니다. Pod를 바꾸면 닫힙니다(아래 key).
+  const [drawer, setDrawer] = useState<{ podKey: string } | undefined>();
+  const closeDrawer = useCallback(() => setDrawer(undefined), []);
+  const restartBlocked = restartBlockReason(
+    pod,
+    streamItem,
+    stream.state?.list.actionNamespaces,
+  );
+
+  // 상세 본문의 조치와 그 뒤 스트림으로 온 이 Pod의 조치를 합칩니다(결정 20). 늦은 것부터입니다.
+  const streamActions = stream.state?.actions;
+  const detailActions = data.detail?.actions;
+  const actions = useMemo(
+    () =>
+      mergeActions([
+        detailActions ?? [],
+        (streamActions ?? []).filter((action) => isActionOn(action, pod)),
+      ]),
+    [detailActions, streamActions, pod],
+  );
+  const detail = useMemo(
+    () => (data.detail === undefined ? undefined : { ...data.detail, actions }),
+    [data.detail, actions],
+  );
+
   return (
     <div className="space-y-5 px-6 py-8 lg:px-8">
-      <DetailHeader pod={pod} item={item} now={now} filter={filter} />
+      <DetailHeader
+        pod={pod}
+        item={item}
+        now={now}
+        filter={filter}
+        restartBlocked={restartBlocked}
+        onRestart={() => setDrawer({ podKey })}
+      />
 
       {data.refreshFailure !== undefined && (
         <p className="text-xs text-warning-ink">
@@ -42,7 +81,7 @@ export function PodDetailPage() {
         </p>
       )}
 
-      {data.detail === undefined ? (
+      {detail === undefined ? (
         data.failure === undefined ? (
           <p className="text-sm text-slate-500">서버에서 불러오는 중입니다.</p>
         ) : (
@@ -56,15 +95,13 @@ export function PodDetailPage() {
         )
       ) : (
         <>
-          {item !== undefined && (
-            <WhatHappened detail={data.detail} item={item} />
-          )}
+          {item !== undefined && <WhatHappened detail={detail} item={item} />}
           <MetricsPanel
-            detail={data.detail}
+            detail={detail}
             series={data.series}
             seriesFailure={data.seriesFailure}
             charts={data.charts}
-            hasSdk={item?.sdk !== undefined || data.detail.values.length > 0}
+            hasSdk={item?.sdk !== undefined || detail.values.length > 0}
             period={period}
             onPeriodChange={setPeriod}
             onChartChange={setSelectedChart}
@@ -77,15 +114,17 @@ export function PodDetailPage() {
         <SnapshotPanel key={podKey} pod={pod} item={item} now={now} />
       )}
 
-      <section className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-line bg-white px-5 py-4">
-        <h2 className="flex items-center gap-2 text-[15px] font-bold text-slate-900">
-          <HistoryIcon className="size-4 text-glass-cyan" />
-          조치 기록
-        </h2>
-        <span className="text-[13px] text-slate-400">
-          조치 기능을 만든 뒤에 이 Pod의 조치가 보입니다.
-        </span>
-      </section>
+      <ActionHistory actions={actions} now={now} filter={filter} />
+
+      {/* 연 Pod에서만 그립니다. 다른 Pod로 옮기면 닫히고, 다시 열면 새 서랍입니다. */}
+      {drawer?.podKey === podKey && (
+        <RestartDrawer
+          pod={pod}
+          item={streamItem}
+          pods={stream.state?.list.pods ?? []}
+          onClose={closeDrawer}
+        />
+      )}
     </div>
   );
 }

@@ -45,6 +45,7 @@ class FakeTarget implements StreamTarget {
 const LIST: PodListBody = {
   serverTime: 1,
   namespaces: ["shop", "pay"],
+  actionNamespaces: [],
   deployments: [],
   pods: [],
 };
@@ -57,6 +58,7 @@ function changes(fields: Partial<PodListChanges>): PodListChanges {
     deployments: [],
     removedDeployments: [],
     statusChanges: [],
+    actions: [],
     ...fields,
   };
 }

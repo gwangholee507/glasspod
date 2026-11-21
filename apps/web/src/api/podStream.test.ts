@@ -1,6 +1,7 @@
-import type { PodItem, PodListChanges } from "@glasspod/protocol";
+import type { ActionItem, PodItem, PodListChanges } from "@glasspod/protocol";
 import { describe, expect, it } from "vitest";
 import {
+  MAX_STREAM_ACTIONS,
   MAX_STREAM_STATUS_CHANGES,
   applyPodChanges,
   applyPodList,
@@ -26,6 +27,7 @@ function changes(fields: Partial<PodListChanges>): PodListChanges {
     deployments: [],
     removedDeployments: [],
     statusChanges: [],
+    actions: [],
     ...fields,
   };
 }
@@ -34,13 +36,27 @@ const STATE: PodStreamState = {
   list: {
     serverTime: 1,
     namespaces: ["shop"],
+    actionNamespaces: ["shop"],
     deployments: [
       { namespace: "shop", name: "orders", desired: 2, ready: 2, available: 2 },
     ],
     pods: [pod("orders-1"), pod("orders-3")],
   },
   statusChanges: [],
+  actions: [],
 };
+
+function action(id: string): ActionItem {
+  return {
+    id,
+    action: "restart-pod",
+    target: { kind: "pod", namespace: "shop", name: "orders-1", uid: "u" },
+    actor: { kind: "user" },
+    requestedAt: 1,
+    finishedAt: 2,
+    result: "succeeded",
+  };
+}
 
 describe("applyPodChanges", () => {
   it("replaces, adds and removes pods in name order", () => {
@@ -98,12 +114,32 @@ describe("applyPodChanges", () => {
     expect(next.statusChanges).toHaveLength(MAX_STREAM_STATUS_CHANGES);
     expect(next.statusChanges.at(-1)).toBe(change);
   });
+
+  it("keeps recent actions in the order received", () => {
+    const next = applyPodChanges(STATE, changes({ actions: [action("a")] }));
+    expect(next.actions.map((item) => item.id)).toEqual(["a"]);
+    expect(applyPodChanges(next, changes({})).actions).toBe(next.actions);
+    const full: PodStreamState = {
+      ...STATE,
+      actions: Array.from({ length: MAX_STREAM_ACTIONS }, (_, index) =>
+        action(`old-${index}`),
+      ),
+    };
+    const last = applyPodChanges(full, changes({ actions: [action("new")] }));
+    expect(last.actions).toHaveLength(MAX_STREAM_ACTIONS);
+    expect(last.actions[0]?.id).toBe("old-1");
+    expect(last.actions.at(-1)?.id).toBe("new");
+  });
 });
 
 describe("applyPodList", () => {
   it("starts over with the new list and no status changes after a reconnect", () => {
     const list = { ...STATE.list, pods: [] };
-    expect(applyPodList(list)).toEqual({ list, statusChanges: [] });
+    expect(applyPodList(list)).toEqual({
+      list,
+      statusChanges: [],
+      actions: [],
+    });
   });
 });
 

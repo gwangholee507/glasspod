@@ -4,6 +4,8 @@ import type { PodRef } from "@glasspod/protocol";
 import { log } from "../log.js";
 import { podKey, podLabel } from "../pod-key.js";
 import type {
+  ActionQuery,
+  ActionRecord,
   ConnectionRecord,
   DeletedPodRecord,
   EventRecord,
@@ -24,6 +26,8 @@ export const MAX_CONNECTIONS_PER_POD = 500;
 export const MAX_STATUS_CHANGES_PER_POD = 500;
 // 쿠버네티스 Event는 같은 것을 바꿔 끼우므로 Pod마다 몇십 개를 넘지 않습니다(docs/guides/T19.md 결정 8).
 export const MAX_KUBE_EVENTS_PER_POD = 200;
+// 조치 기록은 Pod별이 아니라 서버 전체에서 이만큼 남깁니다(docs/guides/T21.md 결정 3).
+export const MAX_ACTIONS = 1_000;
 
 type LimitedKind =
   "metrics" | "events" | "connections" | "statusChanges" | "kubeEvents";
@@ -45,6 +49,9 @@ interface Bucket {
 export class MemoryStore implements Store {
   readonly kind = "memory";
   private readonly buckets = new Map<string, Bucket>();
+  // 넣은 순서입니다. 30분 정리에서 빠집니다.
+  private readonly actionRecords: ActionRecord[] = [];
+  private droppedActions = 0;
   private readonly dropped: Record<LimitedKind, number> = {
     metrics: 0,
     events: 0,
@@ -105,6 +112,32 @@ export class MemoryStore implements Store {
       record,
       MAX_KUBE_EVENTS_PER_POD,
     );
+  }
+
+  async addAction(record: ActionRecord): Promise<void> {
+    this.actionRecords.push(record);
+    const over = this.actionRecords.length - MAX_ACTIONS;
+    if (over <= 0) {
+      return;
+    }
+    this.actionRecords.splice(0, over);
+    if (this.droppedActions === 0) {
+      log.warn("records dropped", { kind: "actions", limit: MAX_ACTIONS });
+    }
+    this.droppedActions += over;
+  }
+
+  async actions(query: ActionQuery = {}): Promise<ActionRecord[]> {
+    const { namespace, pod } = query;
+    return this.actionRecords
+      .filter(
+        (record) =>
+          (namespace === undefined || record.target.namespace === namespace) &&
+          (pod === undefined ||
+            (record.target.namespace === pod.namespace &&
+              record.target.name === pod.name)),
+      )
+      .sort((a, b) => a.requestedAt - b.requestedAt);
   }
 
   async podRecords(pod: PodRef, since: number): Promise<PodRecords> {
@@ -176,11 +209,13 @@ export class MemoryStore implements Store {
       deletedPods: 0,
       statusChanges: 0,
       kubeEvents: 0,
+      actions: this.actionRecords.length,
       droppedMetrics: this.dropped.metrics,
       droppedEvents: this.dropped.events,
       droppedConnections: this.dropped.connections,
       droppedStatusChanges: this.dropped.statusChanges,
       droppedKubeEvents: this.dropped.kubeEvents,
+      droppedActions: this.droppedActions,
     };
     for (const bucket of this.buckets.values()) {
       stats.metrics += bucket.metrics.length;
@@ -219,6 +254,7 @@ export class MemoryStore implements Store {
 
   async close(): Promise<void> {
     this.buckets.clear();
+    this.actionRecords.length = 0;
   }
 
   private bucket(pod: PodRef): Bucket {

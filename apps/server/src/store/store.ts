@@ -3,6 +3,7 @@
 // DB 어댑터(T32)도 붙일 수 있게 모든 메서드는 Promise를 돌려줍니다. 규칙은 docs/guides/T11.md에 있습니다.
 // 저장소는 받은 기록을 고치지 않고, 돌려준 기록도 부르는 쪽이 고치지 않습니다.
 import type {
+  ActionItem,
   EventLevel,
   MetricKind,
   PodRef,
@@ -104,6 +105,17 @@ export interface KubeEventRecord {
   receivedAt: number;
 }
 
+// 조치 기록입니다(docs/guides/T21.md 결정 3, 10). HTTP 본문과 같은 모양이라 그 타입을 그대로 씁니다.
+// 30분 정리(prune)에서 빠지고, 서버 전체에서 최근 몇 건(메모리 어댑터는 1,000건)만 남깁니다.
+export type ActionRecord = ActionItem;
+
+// 조치 기록을 거르는 조건입니다. 둘 다 주면 둘 다 맞는 것만입니다.
+export interface ActionQuery {
+  namespace?: string;
+  // 대상 Pod(namespace·이름)입니다.
+  pod?: PodRef;
+}
+
 export interface PodRecords {
   // 받은 순서입니다.
   metrics: MetricsRecord[];
@@ -126,12 +138,14 @@ export interface StoreStats {
   deletedPods: number;
   statusChanges: number;
   kubeEvents: number;
+  actions: number;
   // 상한을 넘어 버린 수입니다(서버가 시작된 뒤 누적).
   droppedMetrics: number;
   droppedEvents: number;
   droppedConnections: number;
   droppedStatusChanges: number;
   droppedKubeEvents: number;
+  droppedActions: number;
 }
 
 export interface PruneResult {
@@ -148,6 +162,9 @@ export interface Store {
   addStatusChange(record: StatusChangeRecord): Promise<void>;
   // 같은 Pod에 같은 uid의 기록이 있으면 바꿔 끼웁니다.
   addKubeEvent(record: KubeEventRecord): Promise<void>;
+  addAction(record: ActionRecord): Promise<void>;
+  // 남아 있는 조치 기록입니다. 요청한 순서(requestedAt)입니다.
+  actions(query?: ActionQuery): Promise<ActionRecord[]>;
   // since 이후(받은 시각, 연결·판단 변화는 at, 지워진 Pod는 deletedAt)의 Pod 하나의 기록입니다.
   podRecords(pod: PodRef, since: number): Promise<PodRecords>;
   // since 이후에 지워진 Pod입니다. 지워진 순서입니다.
@@ -158,7 +175,7 @@ export interface Store {
     namespace?: string,
   ): Promise<StatusChangeRecord[]>;
   stats(): Promise<StoreStats>;
-  // before보다 이른 기록을 지웁니다.
+  // before보다 이른 기록을 지웁니다. 조치 기록은 지우지 않습니다.
   prune(before: number): Promise<PruneResult>;
   close(): Promise<void>;
 }

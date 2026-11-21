@@ -2,6 +2,7 @@ import type { PodRef } from "@glasspod/protocol";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PodSummary } from "../cluster.js";
 import {
+  MAX_ACTIONS,
   MAX_CONNECTIONS_PER_POD,
   MAX_EVENTS_PER_POD,
   MAX_KUBE_EVENTS_PER_POD,
@@ -10,6 +11,7 @@ import {
   MemoryStore,
 } from "./memory.js";
 import type {
+  ActionRecord,
   EventRecord,
   KubeEventRecord,
   MetricsRecord,
@@ -286,5 +288,57 @@ describe("MemoryStore", () => {
     expect(kubeEvents).toHaveLength(MAX_KUBE_EVENTS_PER_POD);
     expect(kubeEvents[0]?.uid).toBe("e1");
     expect(await store.stats()).toMatchObject({ droppedKubeEvents: 1 });
+  });
+});
+
+function actionRecord(
+  requestedAt: number,
+  pod: PodRef = POD,
+  id = `a-${requestedAt}`,
+): ActionRecord {
+  return {
+    id,
+    action: "restart-pod",
+    target: { kind: "pod", ...pod, uid: "u" },
+    actor: { kind: "user" },
+    requestedAt,
+    finishedAt: requestedAt + 5,
+    result: "succeeded",
+  };
+}
+
+describe("MemoryStore actions", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  it("returns actions in request order and filters by namespace and pod", async () => {
+    const store = new MemoryStore();
+    await store.addAction(actionRecord(30, OTHER));
+    await store.addAction(actionRecord(10));
+    await store.addAction(actionRecord(20, { namespace: "pay", name: "x" }));
+    expect((await store.actions()).map((item) => item.requestedAt)).toEqual([
+      10, 20, 30,
+    ]);
+    expect(
+      (await store.actions({ namespace: "shop" })).map((item) => item.id),
+    ).toEqual(["a-10", "a-30"]);
+    expect((await store.actions({ pod: POD })).map((item) => item.id)).toEqual([
+      "a-10",
+    ]);
+  });
+
+  it("keeps the latest actions only and is not pruned by the 30-minute rule", async () => {
+    const store = new MemoryStore();
+    for (let index = 0; index < MAX_ACTIONS + 3; index += 1) {
+      await store.addAction(actionRecord(index));
+    }
+    await store.prune(Number.MAX_SAFE_INTEGER);
+    const actions = await store.actions();
+    expect(actions).toHaveLength(MAX_ACTIONS);
+    expect(actions[0]?.requestedAt).toBe(3);
+    const stats = await store.stats();
+    expect(stats.actions).toBe(MAX_ACTIONS);
+    expect(stats.droppedActions).toBe(3);
   });
 });

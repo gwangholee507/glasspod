@@ -1,0 +1,297 @@
+// 조치를 화면 글로 바꾸고, 기록을 합치고 거르고, 재시작의 영향을 계산하는 순수 함수입니다(docs/guides/T21.md).
+// 서버의 기록은 코드(error, kubeStatus)이므로 문장은 여기서 만듭니다(결정 22, '결과 문장').
+import type {
+  ActionActor,
+  ActionItem,
+  ActionKind,
+  ActionResult,
+  PodItem,
+  PodRef,
+  PodStatus,
+} from "@glasspod/protocol";
+import { NETWORK_ERROR, UNEXPECTED_BODY } from "../api/client.js";
+import { STATUS_LABEL, statusTone } from "./podText.js";
+import type { Tone } from "./podText.js";
+
+export const ACTION_LABEL: Record<ActionKind, string> = {
+  "restart-pod": "Pod 재시작",
+};
+
+// 조치 기록 화면의 '조치' 거르기 순서입니다.
+export const ACTION_KINDS: readonly ActionKind[] = ["restart-pod"];
+
+export const RESULT_LABEL: Record<ActionResult, string> = {
+  succeeded: "성공",
+  failed: "실패",
+};
+
+// 실행 주체입니다. 화면에서 누른 조치는 '개발자', 자동 규칙은 규칙 이름입니다(결정 4).
+export function actorLabel(actor: ActionActor): string {
+  return actor.kind === "user" ? "개발자" : actor.name;
+}
+
+// 오류 코드마다 문장입니다. 서버가 붙이는 코드 말고도 웹(network-error 등)과 프록시의 코드가 올 수 있습니다.
+const ERROR_SENTENCE: Record<string, string> = {
+  "action-not-allowed":
+    "이 namespace는 조치가 꺼져 있습니다(GLASSPOD_ACTION_NAMESPACES).",
+  "kube-unavailable": "서버가 쿠버네티스에 연결되어 있지 않습니다.",
+  "target-not-found": "Pod가 이미 지워져 있습니다.",
+  "target-changed":
+    "같은 이름의 다른 Pod로 바뀌었습니다. 목록을 다시 보고 실행합니다.",
+  "target-terminating": "Pod가 이미 지워지는 중입니다.",
+  "action-in-progress": "이 대상에 실행 중인 조치가 있습니다.",
+  "kube-forbidden": "서버에 이 조치 권한이 없습니다(RBAC Role).",
+  "kube-error": "쿠버네티스가 조치를 거부했습니다.",
+  "kube-timeout":
+    "쿠버네티스가 10초 안에 답하지 않았습니다. 실행됐는지 목록에서 확인합니다.",
+};
+
+export function errorSentence(code: string): string {
+  return ERROR_SENTENCE[code] ?? `조치를 보내지 못했습니다(${code}).`;
+}
+
+// 서버에 닿지 못했거나 알 수 없는 답이면 조치가 실행됐는지 모릅니다.
+export function isUnknownOutcome(code: string): boolean {
+  return code === NETWORK_ERROR || code === UNEXPECTED_BODY;
+}
+
+function successSentence(item: ActionItem): string {
+  switch (item.action) {
+    case "restart-pod":
+      return item.replicaSet === undefined
+        ? "Pod를 지웠습니다."
+        : `Pod를 지웠습니다. ReplicaSet ${item.replicaSet}이 새 Pod를 만듭니다.`;
+  }
+}
+
+// 기록 한 건의 '내용' 문장입니다. 쿠버네티스가 답한 상태 코드가 있으면 앞에 붙입니다.
+export function actionSentence(item: ActionItem): string {
+  if (item.result === "succeeded") {
+    return successSentence(item);
+  }
+  const sentence = errorSentence(item.error ?? "kube-error");
+  return item.kubeStatus === undefined
+    ? sentence
+    : `HTTP ${item.kubeStatus} · ${sentence}`;
+}
+
+export function actionTone(item: ActionItem): Tone {
+  return item.result === "succeeded" ? "ok" : "warning";
+}
+
+// ── 기록 합치기와 거르기(결정 19, 20) ──
+
+// GET으로 받은 기록과 스트림으로 받은 기록을 합칩니다. 같은 id는 하나로, 늦은 것부터입니다.
+export function mergeActions(
+  lists: readonly (readonly ActionItem[])[],
+): ActionItem[] {
+  const byId = new Map<string, ActionItem>();
+  for (const list of lists) {
+    for (const item of list) {
+      byId.set(item.id, item);
+    }
+  }
+  return [...byId.values()].sort(
+    (a, b) =>
+      b.requestedAt - a.requestedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
+}
+
+export function isActionOn(item: ActionItem, pod: PodRef): boolean {
+  return (
+    item.target.namespace === pod.namespace && item.target.name === pod.name
+  );
+}
+
+export interface ActionFilter {
+  action: ActionKind | "all";
+  result: ActionResult | "all";
+  // 대상 이름에 들어 있는 글자입니다(대소문자 무시). 비면 거르지 않습니다.
+  query: string;
+}
+
+export const NO_ACTION_FILTER: ActionFilter = {
+  action: "all",
+  result: "all",
+  query: "",
+};
+
+export function filterActions(
+  items: readonly ActionItem[],
+  filter: ActionFilter,
+): ActionItem[] {
+  const query = filter.query.trim().toLowerCase();
+  return items.filter(
+    (item) =>
+      (filter.action === "all" || item.action === filter.action) &&
+      (filter.result === "all" || item.result === filter.result) &&
+      (query === "" || item.target.name.toLowerCase().includes(query)),
+  );
+}
+
+function pad(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+// 조치 기록의 시각입니다. 오늘이면 'HH:MM:SS', 아니면 'MM-DD HH:MM:SS'(브라우저 시간대)입니다.
+export function formatActionTime(at: number, now: number): string {
+  const date = new Date(at);
+  const today = new Date(now);
+  const clock = `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  const sameDay =
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate();
+  return sameDay
+    ? clock
+    : `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${clock}`;
+}
+
+// ── 재시작(결정 17, 18) ──
+
+// 버튼을 끌 이유입니다. 누를 수 있으면 undefined입니다.
+// actionNamespaces가 undefined면 아직 목록을 받지 못한 것입니다.
+export function restartBlockReason(
+  pod: PodRef,
+  item: PodItem | undefined,
+  actionNamespaces: readonly string[] | undefined,
+): string | undefined {
+  if (actionNamespaces === undefined || item === undefined) {
+    return "서버에서 Pod 정보를 받는 중입니다.";
+  }
+  if (!actionNamespaces.includes(pod.namespace)) {
+    return actionNamespaces.length === 0
+      ? "서버에서 조치가 꺼져 있습니다(GLASSPOD_ACTION_NAMESPACES)."
+      : "이 namespace는 조치가 꺼져 있습니다(GLASSPOD_ACTION_NAMESPACES).";
+  }
+  if (item.kube === undefined) {
+    return "쿠버네티스에 없는 Pod입니다.";
+  }
+  if (item.kube.terminating) {
+    return "Pod가 지워지는 중입니다.";
+  }
+  return undefined;
+}
+
+export interface ImpactRow {
+  pod: PodRef;
+  status: PodStatus;
+  // 오른쪽 짧은 말입니다.
+  note: string;
+  tone: Tone;
+}
+
+export interface RestartImpact {
+  // 새 Pod를 만들 ReplicaSet입니다. 없으면 지운 Pod가 다시 생기지 않습니다.
+  replicaSet?: string;
+  deployment?: string;
+  // 같은 Deployment(없으면 같은 ReplicaSet)의 다른 Pod입니다. 지워지는 중인 Pod는 뺍니다. 이름순입니다.
+  others: ImpactRow[];
+  // others 가운데 트래픽을 받을 수 있는 Pod(준비됐고 위험이 아님) 수입니다.
+  // 재시작·주의 판단이어도 준비된 Pod는 트래픽을 받으므로 셉니다(2026-11-21 클러스터 확인).
+  serving: number;
+  // 코랄 경고 문장입니다. 없으면 비어 있습니다.
+  warnings: string[];
+}
+
+// Pod 이름의 마지막 조각입니다(예: demo-app-7c9f8b6d5-9kd2p → 9kd2p).
+export function shortPodName(name: string): string {
+  const index = name.lastIndexOf("-");
+  return index < 0 || index === name.length - 1 ? name : name.slice(index + 1);
+}
+
+function isServing(item: PodItem): boolean {
+  return item.kube?.ready === true && item.severity !== "critical";
+}
+
+function impactRow(item: PodItem): ImpactRow {
+  if (item.kube?.ready !== true) {
+    return {
+      pod: item.pod,
+      status: item.status,
+      note: "트래픽 받지 않음",
+      tone: "neutral",
+    };
+  }
+  if (item.severity === "critical") {
+    return {
+      pod: item.pod,
+      status: item.status,
+      note: "응답이 없을 수 있음",
+      tone: "critical",
+    };
+  }
+  if (item.severity === "warning") {
+    return {
+      pod: item.pod,
+      status: item.status,
+      note: "주의",
+      tone: "warning",
+    };
+  }
+  return {
+    pod: item.pod,
+    status: item.status,
+    note: STATUS_LABEL[item.status],
+    tone: statusTone(item.status),
+  };
+}
+
+// 재시작하면 트래픽을 받을 Pod와 경고입니다. 화면이 받은 목록(스트림)으로 계산합니다(결정 17).
+export function restartImpact(
+  target: PodItem,
+  pods: readonly PodItem[],
+): RestartImpact {
+  const replicaSet = target.kube?.replicaSet;
+  const deployment = target.deployment;
+  const sameGroup = (item: PodItem): boolean => {
+    if (item.pod.namespace !== target.pod.namespace) {
+      return false;
+    }
+    if (deployment !== undefined) {
+      return item.deployment === deployment;
+    }
+    return replicaSet !== undefined && item.kube?.replicaSet === replicaSet;
+  };
+  const others = pods
+    .filter(
+      (item) =>
+        item.pod.name !== target.pod.name &&
+        sameGroup(item) &&
+        item.kube !== undefined &&
+        !item.kube.terminating,
+    )
+    .sort((a, b) => (a.pod.name < b.pod.name ? -1 : 1));
+  const serving = others.filter(isServing).length;
+
+  const warnings: string[] = [];
+  if (replicaSet === undefined) {
+    warnings.push(
+      "이 Pod를 다시 만들 컨트롤러가 없습니다. 지우면 다시 생기지 않습니다.",
+    );
+  }
+  // 트래픽을 받지 못하는 다른 Pod(준비 안 됨, 위험)입니다.
+  const troubled = others.filter((item) => !isServing(item));
+  const after =
+    serving === 0
+      ? "새 Pod가 준비될 때까지 트래픽을 받을 Pod가 없습니다."
+      : `지금 재시작하면 새 Pod가 준비될 때까지 Pod ${serving}개가 트래픽을 받습니다.`;
+  const [first] = troubled;
+  if (first !== undefined) {
+    const who =
+      troubled.length === 1
+        ? `같은 Deployment의 ${shortPodName(first.pod.name)}도 ${STATUS_LABEL[first.status]}입니다.`
+        : `같은 Deployment의 ${shortPodName(first.pod.name)} 외 ${troubled.length - 1}개도 트래픽을 받지 못할 수 있습니다.`;
+    warnings.push(`${who} ${after}`);
+  } else if (serving === 0) {
+    warnings.push(after);
+  }
+
+  return {
+    ...(replicaSet === undefined ? {} : { replicaSet }),
+    ...(deployment === undefined ? {} : { deployment }),
+    others: others.map(impactRow),
+    serving,
+    warnings,
+  };
+}

@@ -1,4 +1,5 @@
 import type {
+  ActionItem,
   DeploymentItem,
   PodItem,
   PodSeverity,
@@ -10,6 +11,7 @@ import {
   TIMELINE_WINDOW_MS,
   filterPods,
   groupPods,
+  mergeOverviewTimeline,
   isNamespaceName,
   mergeStatusChanges,
   summarizeDeployments,
@@ -256,6 +258,61 @@ describe("mergeStatusChanges", () => {
     );
     const { changes, truncated } = mergeStatusChanges([many], NOW, 3);
     expect(changes.map((item) => item.pod.name)).toEqual(["p0", "p1", "p2"]);
+    expect(truncated).toBe(true);
+  });
+});
+
+describe("mergeOverviewTimeline", () => {
+  const NOW = 100_000_000;
+  const change: PodStatusChange = {
+    pod: { namespace: "shop", name: "a" },
+    at: NOW - 2_000,
+    status: "stalled",
+    severity: "critical",
+  };
+  function action(id: string, requestedAt: number): ActionItem {
+    return {
+      id,
+      action: "restart-pod",
+      target: { kind: "pod", namespace: "shop", name: "a", uid: "u" },
+      actor: { kind: "user" },
+      requestedAt,
+      finishedAt: requestedAt + 100,
+      result: "succeeded",
+    };
+  }
+
+  it("조치와 판단 변화를 늦은 것부터 섞고, 같은 시각이면 조치가 먼저, 30분 밖은 뺌", () => {
+    const { entries, truncated } = mergeOverviewTimeline(
+      [
+        [change],
+        [{ ...change, at: NOW - 1_000, status: "ok", severity: "none" }],
+      ],
+      [
+        action("x", NOW - 1_000),
+        action("old", NOW - TIMELINE_WINDOW_MS - 1),
+        action("y", NOW - 3_000),
+      ],
+      NOW,
+    );
+    expect(
+      entries.map((entry) =>
+        entry.kind === "action"
+          ? `action:${entry.action.id}`
+          : `status:${entry.change.status}`,
+      ),
+    ).toEqual(["action:x", "status:ok", "status:stalled", "action:y"]);
+    expect(truncated).toBe(false);
+  });
+
+  it("limit줄까지", () => {
+    const { entries, truncated } = mergeOverviewTimeline(
+      [[change]],
+      [action("x", NOW - 1_000), action("y", NOW - 3_000)],
+      NOW,
+      2,
+    );
+    expect(entries).toHaveLength(2);
     expect(truncated).toBe(true);
   });
 });

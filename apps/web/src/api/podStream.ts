@@ -5,6 +5,7 @@
 // 그때는 이 훅이 3초부터 30초까지 늘려 가며 새로 엽니다.
 import { useEffect, useState } from "react";
 import type {
+  ActionItem,
   DeploymentItem,
   PodItem,
   PodListBody,
@@ -14,13 +15,16 @@ import type {
 } from "@glasspod/protocol";
 import { streamPath } from "./pods.js";
 
-// 스트림으로 받은 판단 변화를 들고 있는 최대 수입니다. 넘으면 오래된 것부터 버립니다.
+// 스트림으로 받은 판단 변화와 조치를 들고 있는 최대 수입니다. 넘으면 오래된 것부터 버립니다.
 export const MAX_STREAM_STATUS_CHANGES = 500;
+export const MAX_STREAM_ACTIONS = 500;
 
 export interface PodStreamState {
   list: PodListBody;
   // 마지막 pods 뒤에 스트림으로 받은 판단 변화입니다(받은 순서). 그 전 30분은 GET /api/status-changes로 받습니다.
   statusChanges: PodStatusChange[];
+  // 마지막 pods 뒤에 스트림으로 받은 조치입니다(받은 순서). 그 전 기록은 GET /api/actions로 받습니다(docs/guides/T21.md 결정 12).
+  actions: ActionItem[];
 }
 
 // connecting: 처음 붙는 중, open: 받는 중, reconnecting: 끊겨 다시 붙는 중
@@ -77,6 +81,8 @@ export function applyPodChanges(
   const list: PodListBody = {
     serverTime: changes.serverTime,
     namespaces: changes.namespaces ?? state.list.namespaces,
+    // 서버 설정이라 changes로는 바뀌지 않습니다. 다시 붙을 때 pods로 새로 받습니다.
+    actionNamespaces: state.list.actionNamespaces,
     deployments: merge<DeploymentItem>(
       state.list.deployments,
       changes.deployments,
@@ -96,14 +102,20 @@ export function applyPodChanges(
       : [...state.statusChanges, ...changes.statusChanges].slice(
           -MAX_STREAM_STATUS_CHANGES,
         );
-  return { list, statusChanges };
+  // 서버가 actions를 보내지 않는 경우(예전 서버)도 견딥니다.
+  const received = changes.actions ?? [];
+  const actions =
+    received.length === 0
+      ? state.actions
+      : [...state.actions, ...received].slice(-MAX_STREAM_ACTIONS);
+  return { list, statusChanges, actions };
 }
 
 // pods(목록 전체)를 받으면 목록과 받아 둔 판단 변화를 모두 새로 시작합니다.
 // 판단 변화의 지난 30분은 화면이 pods를 받을 때마다 GET /api/status-changes로 다시 받으므로(docs/guides/T18.md 결정 18),
 // 끊긴 동안의 변화도 채워지고, 다시 붙은 서버가 다른 서버(다시 시작됨 등)여도 그 서버의 기록과 어긋나지 않습니다.
 export function applyPodList(list: PodListBody): PodStreamState {
-  return { list, statusChanges: [] };
+  return { list, statusChanges: [], actions: [] };
 }
 
 interface Streamed {

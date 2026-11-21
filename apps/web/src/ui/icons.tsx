@@ -126,3 +126,32 @@ export function CameraIcon({ className }: IconProps) {
     </Icon>
   );
 }
+
+// 서랍 닫기(X)
+export function CloseIcon({ className }: IconProps) {
+  return (
+    <Icon className={className}>
+      <path d="M6 6l12 12M18 6L6 18" />
+    </Icon>
+  );
+}
+
+// 경고(세모 느낌표)
+export function AlertIcon({ className }: IconProps) {
+  return (
+    <Icon className={className}>
+      <path d="M12 4l9 16H3z" />
+      <path d="M12 10v4M12 17h.01" />
+    </Icon>
+  );
+}
+
+// 안내(동그라미 i)
+export function InfoIcon({ className }: IconProps) {
+  return (
+    <Icon className={className}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 11v5M12 8h.01" />
+    </Icon>
+  );
+}

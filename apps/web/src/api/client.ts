@@ -48,6 +48,35 @@ export async function getJson<T>(
   return parseApiResponse<T>(response.status, text);
 }
 
+// JSON 본문을 POST합니다(조치, docs/guides/T21.md 결정 5). 결과 모양은 getJson과 같습니다.
+// 서버가 받은 뒤에는 응답을 끝까지 기다립니다. 중간에 끊으면 실행 여부를 알 수 없으므로 signal을 받지 않습니다.
+export async function postJson<T>(
+  path: string,
+  body: unknown,
+): Promise<ApiResult<T>> {
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+  } catch (error) {
+    return failure(0, NETWORK_ERROR, errorMessage(error));
+  }
+  let text: string;
+  try {
+    text = await response.text();
+  } catch (error) {
+    return failure(response.status, NETWORK_ERROR, errorMessage(error));
+  }
+  return parseApiResponse<T>(response.status, text);
+}
+
 // 상태 코드와 본문으로 결과를 만듭니다. 2xx 본문은 검증하지 않고 타입만 붙입니다(서버가 이미 검증함, 결정 12).
 export function parseApiResponse<T>(
   status: number,

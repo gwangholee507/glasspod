@@ -162,6 +162,8 @@ export interface PodListBody {
   serverTime: number;
   // 거르지 않은 전체입니다. GLASSPOD_NAMESPACES 순서, 그 뒤 판단에만 있는 namespace를 이름순으로 둡니다.
   namespaces: string[];
+  // 조치할 수 있는 namespace입니다(GLASSPOD_ACTION_NAMESPACES, docs/guides/T21.md 결정 2, 12). 비면 조치가 꺼져 있습니다.
+  actionNamespaces: string[];
   deployments: DeploymentItem[];
   pods: PodItem[];
 }
@@ -247,6 +249,8 @@ export interface PodDetailBody {
   statusChanges: PodStatusChange[];
   // 이 Pod에 대한 쿠버네티스 Event입니다. 마지막으로 일어난 순서입니다(T19).
   kubeEvents: PodKubeEvent[];
+  // 이 Pod(namespace·이름)에 한 조치 전부입니다. 30분이 아니라 서버가 남긴 만큼이고, 요청한 순서입니다(T21 결정 11).
+  actions: ActionItem[];
 }
 
 // ── 그래프용 시계열(docs/guides/T19.md 결정 5, 6) ──
@@ -289,6 +293,86 @@ export interface PodListChanges {
   deployments: DeploymentItem[];
   removedDeployments: PodRef[];
   statusChanges: PodStatusChange[];
+  // 앞 주기 뒤에 끝난 조치입니다(docs/guides/T21.md 결정 12). 요청한 순서입니다.
+  actions: ActionItem[];
   // namespace 목록이 바뀌었을 때만 있습니다.
   namespaces?: string[];
+}
+
+// ── 조치(docs/guides/T21.md) ──
+
+// 조치 종류입니다. 트래픽에서 빼기(T23), 스케일 조정(T24)을 여기에 더합니다.
+export type ActionKind = "restart-pod";
+
+// 조치 요청 본문이 틀렸을 때의 오류 코드입니다. 이 요청은 기록하지 않습니다.
+// invalid-request: 본문이 JSON이 아니거나 모양이 틀림, 모르는 조치, Content-Type이 JSON이 아님(415)
+export type ActionRequestErrorCode = "invalid-request";
+
+// 기록하는 실패의 오류 코드입니다(결정 6). 검사하는 순서대로 적었습니다.
+export type ActionErrorCode =
+  | "action-not-allowed"
+  | "kube-unavailable"
+  | "target-not-found"
+  | "target-changed"
+  | "target-terminating"
+  | "action-in-progress"
+  | "kube-forbidden"
+  | "kube-error"
+  | "kube-timeout";
+
+export interface ActionErrorBody extends ApiErrorBody {
+  error: ActionRequestErrorCode | ActionErrorCode;
+}
+
+// 조치를 실행한 쪽입니다. 화면에서 누른 조치는 user('개발자'), 자동 규칙(T28)은 rule입니다(결정 4).
+export type ActionActor = { kind: "user" } | { kind: "rule"; name: string };
+
+// 조치 대상입니다. uid는 화면이 확인한 Pod의 uid(expectedUid)입니다. 스케일(T24)은 Deployment 대상을 더합니다.
+export interface ActionTarget {
+  kind: "pod";
+  namespace: string;
+  name: string;
+  uid: string;
+}
+
+export type ActionResult = "succeeded" | "failed";
+
+// 조치 기록입니다(결정 10). 서버 저장소도 이 모양 그대로 남깁니다.
+export interface ActionItem {
+  // 서버가 만든 UUID입니다.
+  id: string;
+  action: ActionKind;
+  target: ActionTarget;
+  actor: ActionActor;
+  // 서버가 요청을 받은 시각과 결과가 정해진 시각입니다.
+  requestedAt: number;
+  finishedAt: number;
+  result: ActionResult;
+  // 실패만: 오류 코드, 서버나 쿠버네티스가 준 설명(200자까지), 쿠버네티스가 답한 HTTP 상태 코드입니다.
+  error?: ActionErrorCode;
+  detail?: string;
+  kubeStatus?: number;
+  // 재시작: 실행할 때 그 Pod를 관리하던 ReplicaSet과 Deployment입니다.
+  replicaSet?: string;
+  deployment?: string;
+}
+
+// POST /api/actions 본문입니다.
+export interface ActionRequest {
+  action: ActionKind;
+  target: { namespace: string; name: string };
+  // 화면이 확인한 대상 Pod의 uid입니다(결정 7). 지금 uid와 다르면 409 target-changed입니다.
+  expectedUid: string;
+}
+
+// POST /api/actions 성공 본문입니다.
+export interface ActionBody {
+  serverTime: number;
+  action: ActionItem;
+}
+
+// GET /api/actions 본문입니다. 서버가 남긴 전부(최근 1,000건), 요청한 순서입니다(결정 3, 11).
+export interface ActionsBody {
+  serverTime: number;
+  actions: ActionItem[];
 }

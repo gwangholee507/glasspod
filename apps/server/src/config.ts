@@ -12,6 +12,8 @@ export interface ServerConfig {
   heartbeatIntervalMs: number;
   // 쿠버네티스에서 watch할 namespace입니다. 같은 이름은 한 번만 들어 있습니다(docs/guides/T12.md).
   namespaces: string[];
+  // 조치할 수 있는 namespace입니다. 비면 조치가 꺼져 있습니다. 모두 namespaces 안에 있습니다(docs/guides/T21.md 결정 2).
+  actionNamespaces: string[];
   // 클러스터 밖에서 쓸 kubeconfig context입니다. 없으면 클러스터 안에서만 watch합니다.
   kubeContext: string | undefined;
   // 기록을 둘 저장소입니다(docs/guides/T11.md). 지금은 memory뿐입니다.
@@ -54,9 +56,13 @@ export function isNamespaceName(text: string): boolean {
 }
 
 // 쉼표로 나눈 namespace 목록을 읽습니다. 빈 항목이나 규칙에 맞지 않는 이름이 있으면 시작하지 않습니다.
+// 값이 없을 때 fallback이 빈 문자열이면 빈 목록입니다.
 function readNamespaces(env: Env, name: string, fallback: string): string[] {
   const raw = env[name];
   const text = raw === undefined || raw.trim() === "" ? fallback : raw;
+  if (text.trim() === "") {
+    return [];
+  }
   const namespaces: string[] = [];
   for (const part of text.split(",")) {
     const namespace = part.trim();
@@ -98,7 +104,27 @@ function readChoice<T extends string>(
   return choice;
 }
 
+// 조치할 namespace를 읽습니다. 없으면 조치가 꺼져 있고, watch하지 않는 namespace가 있으면 시작하지 않습니다.
+function readActionNamespaces(env: Env, watched: readonly string[]): string[] {
+  const name = "GLASSPOD_ACTION_NAMESPACES";
+  const namespaces = readNamespaces(env, name, "");
+  const unwatched = namespaces.filter(
+    (namespace) => !watched.includes(namespace),
+  );
+  if (unwatched.length > 0) {
+    throw new Error(
+      `${name} must be namespaces in GLASSPOD_NAMESPACES (not watched: ${unwatched.join(",")})`,
+    );
+  }
+  return namespaces;
+}
+
 export function loadConfig(env: Env): ServerConfig {
+  const namespaces = readNamespaces(
+    env,
+    "GLASSPOD_NAMESPACES",
+    "glasspod-demo",
+  );
   return {
     port: readInteger(env, "GLASSPOD_PORT", 8080, 1, 65535),
     // 범위는 프로토콜 스키마(welcome)와 같습니다.
@@ -125,7 +151,8 @@ export function loadConfig(env: Env): ServerConfig {
       1000,
       MAX_TIMER_MS,
     ),
-    namespaces: readNamespaces(env, "GLASSPOD_NAMESPACES", "glasspod-demo"),
+    namespaces,
+    actionNamespaces: readActionNamespaces(env, namespaces),
     kubeContext: readOptionalText(env, "GLASSPOD_KUBE_CONTEXT"),
     store: readChoice(env, "GLASSPOD_STORE", STORE_KINDS, "memory"),
   };

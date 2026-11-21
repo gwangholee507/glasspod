@@ -1,5 +1,6 @@
 // 목록과 한눈에 보기의 묶기·정렬·요약을 하는 순수 함수입니다(docs/guides/T18.md 결정 6~10, 17, 18).
 import type {
+  ActionItem,
   DeploymentItem,
   PodItem,
   PodStatus,
@@ -330,5 +331,42 @@ export function mergeStatusChanges(
   return {
     changes: sorted.slice(0, limit),
     truncated: sorted.length > limit,
+  };
+}
+
+// ── 한눈에 보기: 판단 변화와 조치를 한 줄씩 섞기(docs/guides/T21.md 결정 21) ──
+
+export type OverviewEntry =
+  | { kind: "status"; at: number; change: PodStatusChange }
+  | { kind: "action"; at: number; action: ActionItem };
+
+// 판단 변화(GET + 스트림)와 조치를 30분 안에서 늦은 것부터 limit줄까지 섞습니다. 같은 시각이면 조치가 먼저입니다.
+export function mergeOverviewTimeline(
+  changeLists: readonly (readonly PodStatusChange[])[],
+  actions: readonly ActionItem[],
+  now: number,
+  limit: number = TIMELINE_LIMIT,
+): { entries: OverviewEntry[]; truncated: boolean } {
+  const since = now - TIMELINE_WINDOW_MS;
+  const { changes } = mergeStatusChanges(changeLists, now, Infinity);
+  const entries: OverviewEntry[] = [
+    ...actions
+      .filter((action) => action.requestedAt >= since)
+      .map((action): OverviewEntry => ({
+        kind: "action",
+        at: action.requestedAt,
+        action,
+      })),
+    ...changes.map((change): OverviewEntry => ({
+      kind: "status",
+      at: change.at,
+      change,
+    })),
+  ];
+  // 안정 정렬이라 같은 시각이면 조치(앞에 넣음)가 먼저, 판단 변화끼리는 mergeStatusChanges의 순서가 남습니다.
+  entries.sort((a, b) => b.at - a.at);
+  return {
+    entries: entries.slice(0, limit),
+    truncated: entries.length > limit,
   };
 }

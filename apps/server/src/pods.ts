@@ -298,11 +298,13 @@ export class AppStates {
         deletedPods: stats.deletedPods,
         statusChanges: stats.statusChanges,
         kubeEvents: stats.kubeEvents,
+        actions: stats.actions,
         droppedMetrics: stats.droppedMetrics,
         droppedEvents: stats.droppedEvents,
         droppedConnections: stats.droppedConnections,
         droppedStatusChanges: stats.droppedStatusChanges,
         droppedKubeEvents: stats.droppedKubeEvents,
+        droppedActions: stats.droppedActions,
         heapUsedMb: megabytes(memory.heapUsed),
         rssMb: megabytes(memory.rss),
       });

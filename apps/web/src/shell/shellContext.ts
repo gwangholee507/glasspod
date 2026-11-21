@@ -27,6 +27,13 @@ export function overviewLink(namespace: string | undefined) {
   return { pathname: "/", search: namespaceSearch(namespace) };
 }
 
+// 조치 기록 화면 주소입니다(docs/guides/T21.md 결정 19).
+export const ACTIONS_PATH = "/actions";
+
+export function actionsLink(namespace: string | undefined) {
+  return { pathname: ACTIONS_PATH, search: namespaceSearch(namespace) };
+}
+
 // 상세 주소입니다. 주소의 한 칸이 되게 인코딩합니다.
 export function podLink(pod: PodRef, namespace: string | undefined) {
   return {
