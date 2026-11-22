@@ -68,7 +68,7 @@ Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 �
 | snapshot | 서버의 HTTP `GET /api/pods/:namespace/:name/snapshot`이 그 Pod의 SDK에 `request`를 보내고 5초까지 기다려 JSON으로 돌려줌(답이 없으면 504). SDK는 `hello`의 `capabilities`에 `snapshot`을 넣고, 상태 값·처리 중인 요청·프로세스 정보로 바로 답함. 연결마다 기다리는 요청 5개까지. 서버는 결과를 보관하지 않음. 자세한 내용은 `docs/guides/T09.md` | 확정 (2026-11-13) |
 | 쿠버네티스 watch | 서버가 `@kubernetes/client-node`의 informer로 namespace마다 Pod, Deployment, ReplicaSet, 클러스터 이벤트를 watch하고, 지금 있는 Pod·Deployment·ReplicaSet의 요약(실행 단계, 준비, 재시작 횟수, 마지막 종료 이유, Pod IP 등)을 메모리에 들고 있음. 볼 namespace는 `GLASSPOD_NAMESPACES`(기본 `glasspod-demo`). 클러스터 밖에서는 `GLASSPOD_KUBE_CONTEXT`로 정한 kubeconfig context만 쓰고(current-context는 따라가지 않음), 없으면 클러스터 안 ServiceAccount, 둘 다 없으면 watch를 끔. 클러스터에 닿지 않으면 경고를 남기고 1초부터 30초까지 늘려 가며 다시 시도. 읽기만 함(list, watch). 자세한 내용은 `docs/guides/T12.md` | 확정 (2026-11-14) |
 | 데모 앱 | 주문 앱 흉내(`examples/demo-app`): 주문 조회·접수 API, 큐와 작업자, 가짜 DB. 관리 포트(기본 `127.0.0.1:3001`)의 HTTP API로 느려짐, 이벤트 루프 막힘, 예외 폭주, 크래시, 메모리 증가를 켜고 끔. 고장은 SDK로 알리지 않음. 부하는 같은 워크스페이스의 부하 스크립트로 만듦(요청마다 새 연결). 자세한 내용은 `docs/guides/T10.md` | 확정 (2026-11-13) |
-| 데모 앱 배포 | 다단계 빌드로 JS만 담은 이미지 `glasspod-demo-app:dev`(베이스 `node:22.22.0-bookworm-slim`, digest 고정)를 `npm run demo:image`로 만듦. 매니페스트는 평범한 YAML(`deploy/demo/`): `glasspod-demo` namespace에 데모 앱 Deployment(Pod 3개, readiness probe만, 메모리 한도 256Mi와 힙 한도 512MB로 메모리 증가가 OOMKilled로 끝남)와 Service, 같은 이미지의 부하 Deployment. `GLASSPOD_SERVER`는 클러스터 안 서버 주소(8장)이고, 노트북에서 띄운 서버에 붙일 때는 `kubectl set env`로 `ws://host.docker.internal:8080/agent`로 잠시 바꿈. 고장 스위치는 `kubectl port-forward`로 씀. 자세한 내용은 `docs/guides/T15.md` | 확정 (2026-11-14) |
+| 데모 앱 배포 | 다단계 빌드로 JS만 담은 이미지 `glasspod-demo-app:dev`(베이스 `node:22.22.0-bookworm-slim`, digest 고정)를 `npm run demo:image`로 만듦. 매니페스트는 평범한 YAML(`deploy/demo/`): `glasspod-demo` namespace에 데모 앱 Deployment(Pod 3개, readiness probe만, 메모리 한도 256Mi와 힙 한도 512MB로 메모리 증가가 OOMKilled로 끝남)와 Service, 같은 이미지의 부하 Deployment. `GLASSPOD_SERVER`는 클러스터 안 서버 주소(8장)이고, 노트북에서 띄운 서버에 붙일 때는 `kubectl set env`로 `ws://host.docker.internal:8080/agent`로 잠시 바꿈. 고장 스위치는 `kubectl port-forward`로 씀. 자세한 내용은 `docs/guides/T15.md`. Pod를 지울 때 SIGTERM 전에 5초 기다리는 preStop sleep(8장, `docs/guides/T22.md`) | 확정 (2026-11-14, 2026-11-22 preStop) |
 | 서버 배포 | 데모 앱과 같은 다단계 빌드로 이미지 `glasspod-server:dev`(`npm run server:image`)를 만듦. 매니페스트는 평범한 YAML(`deploy/server/`): `glasspod` namespace(Pod Security Standards `restricted` 강제)에 ServiceAccount, Deployment(Pod 1개, `Recreate`, readiness probe만, 읽기 전용 파일 시스템), Service(`glasspod-server:8080`). 권한은 감시 대상 namespace마다 둔 Role과 RoleBinding(`rbac-<namespace>.yaml`)이고 관찰 권한(pods·events·deployments·replicasets의 get·list·watch)에 조치 권한을 그 조치를 만들 때 더함(T21 pods delete). 조치할 namespace는 `GLASSPOD_ACTION_NAMESPACES`로도 정함(3장 '조치 공통'). 노트북에서는 `kubectl port-forward`로 API에 닿음. 자세한 내용은 `docs/guides/T16.md` | 확정 (2026-11-14) |
 | SDK 끊김 처리 (Node) | 연결이 없는 동안(첫 연결 전 포함) event를 500개까지 들고 있다가 다시 연결되면 원래 `ts`로, 1분 한도 안에서 보냄. ack는 없고 `seq`는 보낸 순서. 측정은 연결과 상관없이 이어 가고 `welcome` 직후 metrics를 바로 보냄. 서버가 `heartbeat`를 보내고, SDK는 3주기 동안 서버 메시지가 없으면 다시 붙음(7.4). 자세한 내용은 `docs/guides/T08.md` | 확정 (2026-11-12) |
 | 웹 화면 | React + Vite | 확정 (2026-11-05) |
@@ -174,6 +174,7 @@ SDK가 앱을 망치면 안 됩니다. 다음을 지킵니다.
 - **격리**: Service selector와 ReplicaSet selector가 함께 쓰는 라벨을 바꿔야 합니다. 어느 라벨을 바꿀지는 실행할 때 두 selector를 읽어 정합니다. 격리된 Pod는 더 이상 Deployment가 관리하지 않으므로 조사가 끝나면 직접 삭제해야 합니다. 화면에 격리된 Pod 목록을 따로 보여 줍니다.
 - **스케일**: HPA가 관리하는 Deployment는 수동으로 바꾼 값을 HPA가 다시 덮어씁니다. HPA가 있으면 버튼에 경고를 표시합니다.
 - **기록**: 수동이든 자동이든 모든 조치를 기록합니다. 실행 주체(개발자 또는 규칙 이름), 시각, 대상, 조치, 결과를 남깁니다. 서버가 거부한 요청(조치가 꺼진 namespace, 대상이 바뀜 등)도 실패로 남깁니다(2026-11-21, `docs/guides/T21.md`).
+- **재시작**(2026-11-22, `docs/guides/T22.md`): Pod를 지우면 쿠버네티스가 Service에서 빼는 것과 앱에 SIGTERM을 보내는 것이 함께 일어납니다. 앱이 바로 끝나면 빠진 것이 퍼지기 전에 옛 Pod IP로 간 새 연결이 시간 초과로 실패할 수 있으므로, 대상 앱에 preStop 지연을 둡니다(8장). 지연 동안 서버의 판단은 '종료됨'이고 같은 Pod에 다시 보낸 재시작은 `target-terminating`으로 거부합니다.
 - **검사**(2026-11-21): 서버는 쿠버네티스를 부르기 전에 namespace 제한(`GLASSPOD_ACTION_NAMESPACES`), 쿠버네티스 연결, 대상이 있는지, 화면이 확인한 uid와 같은지, 이미 지워지는 중인지, 같은 대상에 실행 중인 조치가 있는지를 차례로 봅니다. 쿠버네티스 호출에도 uid를 precondition으로 넣고 10초까지만 기다립니다.
 
 ### 5.5 자동 규칙 (확장 기능)
@@ -405,6 +406,14 @@ env:
 세 값 가운데 하나라도 없거나 `GLASSPOD_SERVER`가 `ws://`·`wss://` 주소가 아니면 SDK는 경고 한 줄을 남기고 꺼지며, 앱은 그대로 동작합니다.
 
 데모 앱의 매니페스트(`deploy/demo/demo-app.yaml`)가 이 설정을 쓰는 예입니다(2026-11-14, `docs/guides/T15.md`).
+
+재시작(5.4)이나 롤아웃 때 요청을 잃지 않으려면 컨테이너에 preStop 지연을 둡니다. Pod가 Service에서 빠진 것이 퍼지는 동안 앱이 계속 답하고, 그 뒤 SIGTERM을 받아 하던 일을 마치고 끝납니다. 지연과 앱의 종료 시간을 합쳐 유예 시간(`terminationGracePeriodSeconds`, 기본 30초) 안에 들게 합니다. 데모 앱은 5초입니다(2026-11-22, `docs/guides/T22.md`). 로컬 클러스터에서 지연이 없을 때 롤아웃 한 번에 초당 50건 가운데 60건이 실패했고, 5초를 두면 0건이었습니다.
+
+```yaml
+lifecycle:
+  preStop:
+    sleep: { seconds: 5 } # 쿠버네티스 1.30부터 기본으로 켜짐. 이미지에 셸이 없어도 됨
+```
 
 앱 코드에서 SDK를 쓰는 모습입니다. `start()`와 `stop()`은 T04, `gauge()`와 `counter()`는 T05, `exception()`, `state()`, `event()`는 T06, `express()`와 `expressErrors()`는 T07에서 만들었습니다.
 

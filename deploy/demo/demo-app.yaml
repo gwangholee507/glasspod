@@ -45,6 +45,13 @@ spec:
             # 컨테이너 OOMKilled로 끝나게 하려는 것입니다(T10 결정 15). 두지 않으면 Node 기본값이 약 259MiB입니다.
             - name: NODE_OPTIONS
               value: --max-old-space-size=512
+          # Pod를 지우면 SIGTERM 전에 5초 기다립니다(docs/guides/T22.md). 그동안 Service에서 빠진 것이 퍼지고 앱은 계속 답합니다.
+          # 없으면 앱이 바로 끝나 아직 옛 Pod IP로 가는 연결이 시간 초과로 실패합니다(롤아웃 때 몇 건).
+          # 5초와 앱의 강제 종료 10초를 합쳐도 유예 시간(기본 30초) 안입니다.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
           # readiness만 둡니다. 막힘이 길어도 쿠버네티스는 재시작하지 않고 트래픽에서만 뺍니다(2026-11-14 사용자 결정).
           # /healthz는 glasspod.express() 앞에 있어 http.* 지표에 들어가지 않습니다(T10 결정 7).
           readinessProbe:
