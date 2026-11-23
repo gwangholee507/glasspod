@@ -4,19 +4,10 @@ import type { PodItem, PodRef } from "@glasspod/protocol";
 import { useState } from "react";
 import { runAction } from "../api/actions.js";
 import { RotateIcon } from "../ui/icons.js";
-import { StatusBadge } from "../ui/StatusBadge.js";
 import { restartImpact } from "../view/actionText.js";
-import type { RestartImpact } from "../view/actionText.js";
-import type { Tone } from "../view/podText.js";
 import { ActionDrawer } from "./ActionDrawer.js";
 import type { DrawerPhase } from "./ActionDrawer.js";
-
-const NOTE_TEXT: Record<Tone, string> = {
-  critical: "text-warning-ink",
-  warning: "text-warning-ink",
-  ok: "text-slate-500",
-  neutral: "text-slate-500",
-};
+import { ImpactList } from "./ActionParts.js";
 
 export function RestartDrawer({
   pod,
@@ -33,6 +24,8 @@ export function RestartDrawer({
   // 서랍을 연 때의 항목입니다. 이 uid로 실행합니다.
   const [opened] = useState(item);
   const [phase, setPhase] = useState<DrawerPhase>({ kind: "ready" });
+  // 실행을 누른 때의 목록입니다. 실행 중과 성공한 뒤에는 이것으로 영향을 보입니다(새 Pod가 '다른 Pod'로 끼어들지 않게).
+  const [runPods, setRunPods] = useState<readonly PodItem[]>(pods);
   const uid = opened?.kube?.uid;
   const current = item ?? opened;
 
@@ -46,12 +39,16 @@ export function RestartDrawer({
 
   // 대상의 ReplicaSet·Deployment는 서랍을 연 때의 것으로 봅니다. 지운 뒤에는 쿠버네티스 요약이 빠져
   // '컨트롤러가 없다'로 바뀌기 때문입니다. 다른 Pod는 지금 목록으로 계속 다시 계산합니다.
-  const impact = opened === undefined ? undefined : restartImpact(opened, pods);
+  const impactPods =
+    phase.kind === "running" || phase.kind === "succeeded" ? runPods : pods;
+  const impact =
+    opened === undefined ? undefined : restartImpact(opened, impactPods);
 
   const run = () => {
     if (uid === undefined) {
       return;
     }
+    setRunPods(pods);
     setPhase({ kind: "running" });
     void runAction({
       action: "restart-pod",
@@ -102,43 +99,5 @@ export function RestartDrawer({
       onConfirm={run}
       onClose={onClose}
     />
-  );
-}
-
-function ImpactList({ impact }: { impact: RestartImpact | undefined }) {
-  if (
-    impact === undefined ||
-    (impact.others.length === 0 && impact.replicaSet === undefined)
-  ) {
-    return (
-      <p className="text-[13px] text-slate-500">
-        같은 Deployment에 다른 Pod가 없습니다.
-      </p>
-    );
-  }
-  return (
-    <ul className="divide-y divide-line rounded-xl border border-line">
-      {impact.others.map((row) => (
-        <li
-          key={row.pod.name}
-          className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5"
-        >
-          <StatusBadge status={row.status} />
-          <span className="min-w-0 flex-1 font-mono text-[13px] break-all text-slate-800">
-            {row.pod.name}
-          </span>
-          <span className={`text-xs ${NOTE_TEXT[row.tone]}`}>{row.note}</span>
-        </li>
-      ))}
-      {impact.replicaSet !== undefined && (
-        <li className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5">
-          <StatusBadge status="starting" />
-          <span className="min-w-0 flex-1 text-[13px] text-slate-800">
-            새 Pod
-          </span>
-          <span className="text-xs text-slate-500">ReplicaSet이 만듭니다</span>
-        </li>
-      )}
-    </ul>
   );
 }

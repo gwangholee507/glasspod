@@ -1,6 +1,5 @@
 // 왼쪽 메뉴입니다: 로고, namespace 고르기, 메뉴, 실시간 연결 상태(docs/guides/T18.md 결정 2, 3, 6, 19).
-// '조치 기록'은 /actions로 갑니다(docs/guides/T21.md 결정 19). '격리된 Pod'는 T23까지 '준비 중'입니다.
-import type { ReactNode } from "react";
+// '조치 기록'은 /actions(docs/guides/T21.md 결정 19), '격리된 Pod'는 /isolated(docs/guides/T23.md 결정 20)로 갑니다.
 import { Link } from "react-router";
 import type { PodStreamStatus } from "../api/podStream.js";
 import {
@@ -10,10 +9,10 @@ import {
   ListIcon,
 } from "../ui/icons.js";
 import { formatDuration } from "../view/podText.js";
-import { actionsLink, overviewLink } from "./shellContext.js";
+import { actionsLink, isolatedLink, overviewLink } from "./shellContext.js";
 
 // 지금 고른 메뉴입니다.
-export type SidebarSection = "pods" | "actions";
+export type SidebarSection = "pods" | "isolated" | "actions";
 
 const MENU_CURRENT =
   "flex items-center gap-3 rounded-lg bg-mist px-3 py-2 font-semibold text-deep-teal";
@@ -37,6 +36,7 @@ export function Sidebar({
   namespaces,
   onNamespaceChange,
   podCount,
+  isolatedCount,
   streamStatus,
   sinceUpdateMs,
   current,
@@ -46,6 +46,8 @@ export function Sidebar({
   namespaces: readonly string[];
   onNamespaceChange: (namespace: string | undefined) => void;
   podCount: number | undefined;
+  // 고른 namespace의 격리된 Pod 수입니다. 아직 목록을 받지 못했으면 undefined입니다.
+  isolatedCount: number | undefined;
   streamStatus: PodStreamStatus;
   sinceUpdateMs: number | undefined;
   current: SidebarSection;
@@ -101,7 +103,17 @@ export function Sidebar({
             <span className="text-xs font-normal">{podCount}</span>
           )}
         </Link>
-        <ComingSoon icon={<IsolateIcon />} label="격리된 Pod" />
+        <Link
+          to={isolatedLink(namespace)}
+          aria-current={current === "isolated" ? "page" : undefined}
+          className={current === "isolated" ? MENU_CURRENT : MENU_OTHER}
+        >
+          <IsolateIcon />
+          <span className="flex-1">격리된 Pod</span>
+          {isolatedCount !== undefined && (
+            <span className="text-xs font-normal">{isolatedCount}</span>
+          )}
+        </Link>
         <Link
           to={actionsLink(namespace)}
           aria-current={current === "actions" ? "page" : undefined}
@@ -128,20 +140,5 @@ export function Sidebar({
         )}
       </div>
     </aside>
-  );
-}
-
-// 아직 없는 화면입니다. 흐리게 두고 누를 수 없습니다(결정 2).
-function ComingSoon({ icon, label }: { icon: ReactNode; label: string }) {
-  return (
-    <span
-      aria-disabled="true"
-      title="준비 중입니다"
-      className="flex cursor-not-allowed items-center gap-3 rounded-lg px-3 py-2 text-slate-400"
-    >
-      {icon}
-      <span className="flex-1">{label}</span>
-      <span className="text-xs">준비 중</span>
-    </span>
   );
 }

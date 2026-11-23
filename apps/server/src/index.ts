@@ -86,6 +86,8 @@ const actions = new ActionService({
   kube: kube === undefined ? undefined : createKubeActions(kube),
   store,
   onRecorded: (item) => feed.queueAction(item),
+  // 트래픽에서 뺄 때 '격리할 때 판단'으로 남깁니다(docs/guides/T23.md 결정 5).
+  statusOf: (pod) => statuses.get(pod)?.status,
 });
 // Pod가 지워지면 마지막 요약을 남기고, 그 Pod의 SDK 연결이 남아 있으면 닫습니다(docs/guides/T13.md 결정 4).
 // Pod에 대한 쿠버네티스 Event는 저장소에 30분 남깁니다(docs/guides/T19.md 결정 8).

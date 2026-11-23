@@ -1,10 +1,12 @@
 // Pod 상세 화면(분할 화면의 오른쪽)입니다(design.md 5.3, docs/guides/T19.md).
 // 머리줄, '무슨 일이 있었나', 지표 그래프, snapshot, 조치 기록을 위에서 아래로 둡니다.
 // 판단 배지와 문장은 목록 스트림의 항목을 쓰고(없으면 상세 본문의 항목), 상세와 시계열은 그 항목이 바뀔 때 다시 받습니다.
-// '재시작'을 누르면 오른쪽 서랍에서 확인한 뒤 실행합니다(docs/guides/T21.md).
-import type { PodRef } from "@glasspod/protocol";
+// 조치 버튼을 누르면 오른쪽 서랍에서 확인한 뒤 실행합니다(docs/guides/T21.md, docs/guides/T23.md).
+import type { ActionKind, PodRef } from "@glasspod/protocol";
 import { useCallback, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
+import { DeleteDrawer } from "../actions/DeleteDrawer.js";
+import { IsolateDrawer } from "../actions/IsolateDrawer.js";
 import { RestartDrawer } from "../actions/RestartDrawer.js";
 import { usePodDetail } from "../api/usePodDetail.js";
 import { ActionHistory } from "../detail/ActionHistory.js";
@@ -15,9 +17,10 @@ import { SnapshotPanel } from "../detail/SnapshotPanel.js";
 import { WhatHappened } from "../detail/WhatHappened.js";
 import { overviewLink, useShell } from "../shell/shellContext.js";
 import {
+  ACTION_KINDS,
+  actionBlockReason,
   isActionOn,
   mergeActions,
-  restartBlockReason,
 } from "../view/actionText.js";
 
 export function PodDetailPage() {
@@ -38,14 +41,18 @@ export function PodDetailPage() {
   const item = streamItem ?? data.detail?.item;
   const podKey = JSON.stringify([namespace, name]);
 
-  // 열린 서랍입니다. Pod를 바꾸면 닫힙니다(아래 key).
-  const [drawer, setDrawer] = useState<{ podKey: string } | undefined>();
+  // 열린 서랍입니다. Pod를 바꾸면 닫힙니다(아래 podKey 비교).
+  const [drawer, setDrawer] = useState<
+    { podKey: string; action: ActionKind } | undefined
+  >();
   const closeDrawer = useCallback(() => setDrawer(undefined), []);
-  const restartBlocked = restartBlockReason(
-    pod,
-    streamItem,
-    stream.state?.list.actionNamespaces,
-  );
+  const actionNamespaces = stream.state?.list.actionNamespaces;
+  const blocked = Object.fromEntries(
+    ACTION_KINDS.map((action) => [
+      action,
+      actionBlockReason(action, pod, streamItem, actionNamespaces),
+    ]),
+  ) as Record<ActionKind, string | undefined>;
 
   // 상세 본문의 조치와 그 뒤 스트림으로 온 이 Pod의 조치를 합칩니다(결정 20). 늦은 것부터입니다.
   const streamActions = stream.state?.actions;
@@ -70,8 +77,8 @@ export function PodDetailPage() {
         item={item}
         now={now}
         filter={filter}
-        restartBlocked={restartBlocked}
-        onRestart={() => setDrawer({ podKey })}
+        blocked={blocked}
+        onAction={(action) => setDrawer({ podKey, action })}
       />
 
       {data.refreshFailure !== undefined && (
@@ -117,13 +124,24 @@ export function PodDetailPage() {
       <ActionHistory actions={actions} now={now} filter={filter} />
 
       {/* 연 Pod에서만 그립니다. 다른 Pod로 옮기면 닫히고, 다시 열면 새 서랍입니다. */}
-      {drawer?.podKey === podKey && (
+      {drawer?.podKey === podKey && drawer.action === "restart-pod" && (
         <RestartDrawer
           pod={pod}
           item={streamItem}
           pods={stream.state?.list.pods ?? []}
           onClose={closeDrawer}
         />
+      )}
+      {drawer?.podKey === podKey && drawer.action === "isolate-pod" && (
+        <IsolateDrawer
+          pod={pod}
+          item={streamItem}
+          pods={stream.state?.list.pods ?? []}
+          onClose={closeDrawer}
+        />
+      )}
+      {drawer?.podKey === podKey && drawer.action === "delete-pod" && (
+        <DeleteDrawer pod={pod} item={streamItem} onClose={closeDrawer} />
       )}
     </div>
   );

@@ -108,6 +108,9 @@ export function kubeItem(summary: PodSummary): PodKube {
     ...(summary.createdAt === undefined
       ? {}
       : { createdAt: summary.createdAt }),
+    ...(summary.isolation === undefined
+      ? {}
+      : { isolation: summary.isolation }),
   };
 }
 
@@ -306,15 +309,17 @@ export function parseMetricsQuery(value: unknown): MetricsQuery {
 
 // 그래프에 함께 그릴 Pod입니다. 이 Pod가 맨 앞, 그 뒤 같은 namespace·Deployment의 다른 Pod를 이름순으로 10개까지.
 export function seriesPods(item: PodItem, items: readonly PodItem[]): PodRef[] {
+  // 트래픽에서 뺀 Pod는 Deployment가 놓아주므로 원래 Deployment의 Pod와 견줍니다(docs/guides/T23.md 결정 13).
+  const deployment = item.deployment ?? item.kube?.isolation?.deployment;
   const siblings =
-    item.deployment === undefined
+    deployment === undefined
       ? []
       : items
           .filter(
             (other) =>
               other.pod.namespace === item.pod.namespace &&
               other.pod.name !== item.pod.name &&
-              other.deployment === item.deployment,
+              other.deployment === deployment,
           )
           .map((other) => other.pod)
           .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))

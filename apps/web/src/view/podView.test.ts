@@ -8,9 +8,11 @@ import type {
 } from "@glasspod/protocol";
 import { describe, expect, it } from "vitest";
 import {
+  ISOLATED_GROUP_KEY,
   TIMELINE_WINDOW_MS,
   filterPods,
   groupPods,
+  needsAttention,
   mergeOverviewTimeline,
   isNamespaceName,
   mergeStatusChanges,
@@ -156,6 +158,61 @@ describe("groupPods", () => {
       "a-ns / web",
       "b-ns / web",
     ]);
+  });
+});
+
+// 트래픽에서 뺀 Pod입니다. ReplicaSet이 놓아주어 Deployment가 없습니다.
+function isolatedPod(name: string, status: PodStatus = "stalled"): PodItem {
+  return {
+    ...pod(name, status, null),
+    kube: {
+      uid: `uid-${name}`,
+      phase: "Running",
+      ready: true,
+      terminating: false,
+      restarts: 0,
+      isolation: { labels: { app: "web" }, deployment: "web" },
+    },
+  };
+}
+
+describe("groupPods with isolated pods", () => {
+  const pods = [
+    pod("w-ok"),
+    pod("w-stalled", "stalled"),
+    isolatedPod("z-out", "stalled"),
+    isolatedPod("b-out", "ok"),
+  ];
+
+  it("keeps isolated pods out of '지금 볼 것' and puts them last", () => {
+    const groups = groupPods(pods, "all");
+    expect(groups.map((group) => group.title)).toEqual([
+      "지금 볼 것",
+      "정상",
+      "격리됨",
+    ]);
+    expect(names(groups[0]!.pods)).toEqual(["w-stalled"]);
+    expect(names(groups[2]!.pods)).toEqual(["b-out", "z-out"]);
+    expect(groups[2]!.key).toBe(ISOLATED_GROUP_KEY);
+  });
+
+  it("leaves them out of the problems tab and keeps them last by deployment", () => {
+    expect(
+      groupPods(pods, "problems").flatMap((group) => names(group.pods)),
+    ).toEqual(["w-stalled"]);
+    expect(groupPods(pods, "deployments").map((group) => group.title)).toEqual([
+      "web",
+      "격리됨",
+    ]);
+    expect(needsAttention(isolatedPod("x"))).toBe(false);
+  });
+
+  it("leaves them out of the deployment summary", () => {
+    expect(
+      summarizeDeployments([], [pod("w1"), isolatedPod("x")]).map(
+        (summary) => summary.segments.length,
+      ),
+    ).toEqual([1]);
   });
 });
 

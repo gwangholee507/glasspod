@@ -1,4 +1,5 @@
 // 목록과 한눈에 보기의 묶기·정렬·요약을 하는 순수 함수입니다(docs/guides/T18.md 결정 6~10, 17, 18).
+// 트래픽에서 뺀(격리된) Pod는 판단 묶음과 Deployment 요약에서 빼고 맨 아래 '격리됨' 묶음에 둡니다(docs/guides/T23.md 결정 4, 19).
 import type {
   ActionItem,
   DeploymentItem,
@@ -22,9 +23,14 @@ export function isNamespaceName(value: string): boolean {
   return value.length <= MAX_NAMESPACE_LENGTH && NAMESPACE_PATTERN.test(value);
 }
 
-// '지금 볼 것'에 들어가는 Pod입니다(위험, 주의).
+// 트래픽에서 뺀(격리된) Pod입니다. 표시 라벨이 있는 Pod입니다(docs/guides/T23.md 결정 12).
+export function isIsolated(item: PodItem | undefined): boolean {
+  return item?.kube?.isolation !== undefined;
+}
+
+// '지금 볼 것'에 들어가는 Pod입니다(위험, 주의). 일부러 뺀 Pod는 넣지 않습니다.
 export function needsAttention(item: PodItem): boolean {
-  return item.severity !== "none";
+  return item.severity !== "none" && !isIsolated(item);
 }
 
 function compareNames(a: PodItem, b: PodItem): number {
@@ -72,6 +78,9 @@ const CALM_GROUPS: readonly PodStatus[] = [
 
 const ATTENTION_TITLE = "지금 볼 것";
 const NO_DEPLOYMENT_TITLE = "Deployment 없음";
+// '격리됨' 묶음의 key입니다. 목록은 이 묶음의 점을 '격리됨' 배지 색으로 그립니다.
+export const ISOLATED_GROUP_KEY = "isolated";
+const ISOLATED_TITLE = "격리됨";
 
 // 묶음 안에서 가장 강한 강조입니다. Deployment별 묶음의 점 색에 씁니다.
 function strongestTone(pods: readonly PodItem[]): Tone {
@@ -98,14 +107,34 @@ function attentionGroup(pods: readonly PodItem[]): PodGroup[] {
 
 // 탭에 맞게 묶습니다(결정 7~9). 빈 묶음은 돌려주지 않습니다.
 // showNamespace는 여러 namespace를 함께 볼 때 Deployment 묶음 이름에 namespace를 붙입니다.
+// 격리된 Pod는 '문제' 탭에서 빼고, 다른 탭에서는 맨 아래 '격리됨' 묶음(이름순)에 둡니다.
 export function groupPods(
   pods: readonly PodItem[],
   tab: ListTab,
   showNamespace = false,
 ): PodGroup[] {
+  const isolated = pods.filter(isIsolated).sort(compareNames);
+  const active = pods.filter((item) => !isIsolated(item));
   if (tab === "problems") {
-    return attentionGroup(pods);
+    return attentionGroup(active);
   }
+  const groups = groupActivePods(active, tab, showNamespace);
+  if (isolated.length > 0) {
+    groups.push({
+      key: ISOLATED_GROUP_KEY,
+      title: ISOLATED_TITLE,
+      tone: "ok",
+      pods: isolated,
+    });
+  }
+  return groups;
+}
+
+function groupActivePods(
+  pods: readonly PodItem[],
+  tab: "all" | "deployments",
+  showNamespace: boolean,
+): PodGroup[] {
   if (tab === "all") {
     const groups = attentionGroup(pods);
     for (const status of CALM_GROUPS) {
@@ -234,7 +263,8 @@ export function summarizeDeployments(
       pods: [],
     });
   }
-  for (const item of pods) {
+  // 격리된 Pod는 Deployment가 관리하지 않으므로 요약에서 뺍니다(docs/guides/T23.md 결정 13).
+  for (const item of pods.filter((pod) => !isIsolated(pod))) {
     const key = keyOf(item.pod.namespace, item.deployment);
     const summary = summaries.get(key) ?? {
       namespace: item.pod.namespace,

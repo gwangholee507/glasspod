@@ -14,6 +14,7 @@ import {
   actionSentence,
   actionTone,
   actorLabel,
+  isIsolation,
 } from "./actionText.js";
 import { changeSentence, formatMs, statusTone } from "./podText.js";
 import type { Tone } from "./podText.js";
@@ -57,6 +58,8 @@ export interface TimelineRow {
   cause?: number;
   // 판단 변화 줄의 이전·새 판단입니다.
   status?: { previous?: PodStatus; next: PodStatus };
+  // 성공한 '트래픽에서 빼기' 줄입니다. '격리됨' 배지를 붙입니다(docs/guides/T23.md 결정 21).
+  isolated?: true;
 }
 
 // instance id를 줄여 씁니다(예: 3f9c…a21).
@@ -155,6 +158,7 @@ export function whatHappened(
       label: "조치",
       title: `${ACTION_LABEL[action.action]} · ${actorLabel(action.actor)}`,
       detail: actionSentence(action),
+      ...(isIsolation(action) ? { isolated: true as const } : {}),
     });
   }
   const restart = item.restart;
@@ -456,7 +460,16 @@ export function podFacts(
   formatAge: (ms: number) => string,
 ): string[] {
   const facts: string[] = [];
-  if (item.deployment !== undefined) {
+  const isolation = item.kube?.isolation;
+  if (isolation !== undefined) {
+    // 격리된 Pod는 Deployment가 놓아주었으므로 원래 Deployment와 뺀 때를 씁니다(docs/guides/T23.md 결정 17).
+    if (isolation.deployment !== undefined) {
+      facts.push(`원래 Deployment ${isolation.deployment}`);
+    }
+    if (isolation.at !== undefined) {
+      facts.push(`격리 ${formatAge(Math.max(0, now - isolation.at))} 전`);
+    }
+  } else if (item.deployment !== undefined) {
     facts.push(item.deployment);
   }
   if (item.kube?.ip !== undefined) {

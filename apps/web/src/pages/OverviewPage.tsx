@@ -13,12 +13,18 @@ import { useActionHistory } from "../api/useActionHistory.js";
 import { ResultBadge } from "../actions/ActionParts.js";
 import { podLink, useShell } from "../shell/shellContext.js";
 import { ChevronRightIcon, ClockIcon, HexagonIcon } from "../ui/icons.js";
-import { StatusBadge, TONE_BAR, TONE_DOT } from "../ui/StatusBadge.js";
+import {
+  IsolatedBadge,
+  StatusBadge,
+  TONE_BAR,
+  TONE_DOT,
+} from "../ui/StatusBadge.js";
 import {
   ACTION_LABEL,
   actionSentence,
   actionTone,
   actorLabel,
+  isIsolation,
 } from "../view/actionText.js";
 import { changeSentence, formatClock, statusTone } from "../view/podText.js";
 import {
@@ -312,6 +318,7 @@ function ActionTimelineRow({
             {ACTION_LABEL[action.action]} · {actorLabel(action.actor)}
           </span>
           <ResultBadge item={action} />
+          {isIsolation(action) && <IsolatedBadge />}
         </div>
         <p
           className={`mt-1.5 text-[13px] ${

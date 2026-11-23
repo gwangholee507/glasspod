@@ -86,6 +86,21 @@ export interface PodTermination {
   finishedAt?: string;
 }
 
+// 트래픽에서 뺀(격리한) Pod의 정보입니다(docs/guides/T23.md 결정 5, 12). 서버가 Pod의 라벨·주석에서 읽습니다.
+// 표시 라벨(glasspod/isolated=true)이 있으면 격리된 Pod이고, 주석이 없거나 깨졌으면 그 필드만 없습니다.
+export interface PodIsolation {
+  // 격리한 시각(서버 시계)입니다.
+  at?: number;
+  // 뗀 라벨입니다(키 → 그때 값).
+  labels: Record<string, string>;
+  // 격리할 때의 판단입니다.
+  status?: PodStatus;
+  // 격리할 때 이 Pod를 관리하던 Deployment와 ReplicaSet입니다.
+  deployment?: string;
+  replicaSet?: string;
+  actor?: ActionActor;
+}
+
 // 쿠버네티스 Pod 요약입니다(docs/guides/T12.md '요약'). 쿠버네티스에 없는 Pod는 항목에 없습니다.
 export interface PodKube {
   uid: string;
@@ -99,6 +114,8 @@ export interface PodKube {
   replicaSet?: string;
   // 쿠버네티스가 준 ISO 8601 문자열입니다.
   createdAt?: string;
+  // 트래픽에서 뺀 Pod만 있습니다(T23).
+  isolation?: PodIsolation;
 }
 
 // SDK 쪽 지금 상태입니다(docs/guides/T11.md). SDK가 붙은 적이 없는 Pod는 항목에 없습니다.
@@ -301,8 +318,9 @@ export interface PodListChanges {
 
 // ── 조치(docs/guides/T21.md) ──
 
-// 조치 종류입니다. 트래픽에서 빼기(T23), 스케일 조정(T24)을 여기에 더합니다.
-export type ActionKind = "restart-pod";
+// 조치 종류입니다. 스케일 조정(T24)을 여기에 더합니다.
+// restart-pod: Pod 재시작(삭제 → 컨트롤러가 새로 만듦), isolate-pod: 트래픽에서 빼기(T23), delete-pod: 격리된 Pod 삭제(T23)
+export type ActionKind = "restart-pod" | "isolate-pod" | "delete-pod";
 
 // 조치 요청 본문이 틀렸을 때의 오류 코드입니다. 이 요청은 기록하지 않습니다.
 // invalid-request: 본문이 JSON이 아니거나 모양이 틀림, 모르는 조치, Content-Type이 JSON이 아님(415)
@@ -315,6 +333,10 @@ export type ActionErrorCode =
   | "target-not-found"
   | "target-changed"
   | "target-terminating"
+  // T23: 격리된 Pod에 재시작·트래픽에서 빼기, 격리되지 않은 Pod에 삭제, 뗄 라벨을 정하지 못함
+  | "target-isolated"
+  | "target-not-isolated"
+  | "cannot-isolate"
   | "action-in-progress"
   | "kube-forbidden"
   | "kube-error"
@@ -352,9 +374,30 @@ export interface ActionItem {
   error?: ActionErrorCode;
   detail?: string;
   kubeStatus?: number;
-  // 재시작: 실행할 때 그 Pod를 관리하던 ReplicaSet과 Deployment입니다.
+  // 재시작·트래픽에서 빼기: 실행할 때 그 Pod를 관리하던 ReplicaSet과 Deployment입니다.
   replicaSet?: string;
   deployment?: string;
+  // 트래픽에서 빼기 성공: 실제로 뗀 라벨과 이 Pod를 고르던 Service입니다(T23 결정 11).
+  isolation?: { labels: Record<string, string>; services: string[] };
+}
+
+// 트래픽에서 빼기의 계획입니다(T23 결정 6, 10). 실행할 때도 같은 규칙으로 다시 계산합니다.
+export interface IsolationPlan {
+  // 뗄 라벨입니다(키 → 지금 값).
+  labels: Record<string, string>;
+  // 이 Pod를 고르는 Service입니다. 이름순입니다.
+  services: string[];
+  // 대신할 Pod를 만들 ReplicaSet과 그 Deployment입니다. 컨트롤러가 없는 Pod면 없습니다.
+  replicaSet?: string;
+  deployment?: string;
+}
+
+// GET /api/pods/:namespace/:name/isolation-plan 성공 본문입니다. uid는 계산할 때 읽은 Pod의 uid입니다.
+export interface IsolationPlanBody {
+  serverTime: number;
+  pod: PodRef;
+  uid: string;
+  plan: IsolationPlan;
 }
 
 // POST /api/actions 본문입니다.

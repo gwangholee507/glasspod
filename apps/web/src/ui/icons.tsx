@@ -155,3 +155,12 @@ export function InfoIcon({ className }: IconProps) {
     </Icon>
   );
 }
+
+// 격리된 Pod 삭제(휴지통)
+export function TrashIcon({ className }: IconProps) {
+  return (
+    <Icon className={className}>
+      <path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6" />
+    </Icon>
+  );
+}

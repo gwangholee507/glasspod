@@ -2,7 +2,7 @@
 // SDK event, 쿠버네티스 이벤트, SDK 연결, 판단 변화, 재시작을 늦은 것부터 한 줄씩 보여 줍니다.
 import type { PodDetailBody, PodItem } from "@glasspod/protocol";
 import { ChevronRightIcon, ClockIcon } from "../ui/icons.js";
-import { StatusBadge, TONE_DOT } from "../ui/StatusBadge.js";
+import { IsolatedBadge, StatusBadge, TONE_DOT } from "../ui/StatusBadge.js";
 import { WHAT_HAPPENED_LIMIT, whatHappened } from "../view/detailView.js";
 import type { TimelineRow } from "../view/detailView.js";
 import { formatClock } from "../view/podText.js";
@@ -101,6 +101,7 @@ function Row({ row }: { row: TimelineRow }) {
           <span className="text-[13px] font-semibold break-words text-slate-800">
             {row.title}
           </span>
+          {row.isolated === true && <IsolatedBadge />}
           {row.cause !== undefined && (
             <span className="rounded-md bg-warning-wash px-1.5 py-0.5 text-[11px] font-semibold whitespace-nowrap text-warning-ink">
               후보 {row.cause}

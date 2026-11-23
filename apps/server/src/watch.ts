@@ -178,6 +178,7 @@ function podLogFields(
     ip: pod.ip,
     replicaSet: pod.replicaSet,
     deployment,
+    isolated: pod.isolation === undefined ? undefined : true,
   };
 }
 

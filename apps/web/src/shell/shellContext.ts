@@ -34,6 +34,13 @@ export function actionsLink(namespace: string | undefined) {
   return { pathname: ACTIONS_PATH, search: namespaceSearch(namespace) };
 }
 
+// 격리된 Pod 화면 주소입니다(docs/guides/T23.md 결정 18).
+export const ISOLATED_PATH = "/isolated";
+
+export function isolatedLink(namespace: string | undefined) {
+  return { pathname: ISOLATED_PATH, search: namespaceSearch(namespace) };
+}
+
 // 상세 주소입니다. 주소의 한 칸이 되게 인코딩합니다.
 export function podLink(pod: PodRef, namespace: string | undefined) {
   return {

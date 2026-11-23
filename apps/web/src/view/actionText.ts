@@ -1,10 +1,11 @@
-// 조치를 화면 글로 바꾸고, 기록을 합치고 거르고, 재시작의 영향을 계산하는 순수 함수입니다(docs/guides/T21.md).
-// 서버의 기록은 코드(error, kubeStatus)이므로 문장은 여기서 만듭니다(결정 22, '결과 문장').
+// 조치를 화면 글로 바꾸고, 기록을 합치고 거르고, 재시작·트래픽에서 빼기의 영향을 계산하는 순수 함수입니다
+// (docs/guides/T21.md, docs/guides/T23.md). 서버의 기록은 코드(error, kubeStatus)이므로 문장은 여기서 만듭니다(T21 결정 22, '결과 문장').
 import type {
   ActionActor,
   ActionItem,
   ActionKind,
   ActionResult,
+  IsolationPlan,
   PodItem,
   PodRef,
   PodStatus,
@@ -12,13 +13,20 @@ import type {
 import { NETWORK_ERROR, UNEXPECTED_BODY } from "../api/client.js";
 import { STATUS_LABEL, statusTone } from "./podText.js";
 import type { Tone } from "./podText.js";
+import { isIsolated } from "./podView.js";
 
 export const ACTION_LABEL: Record<ActionKind, string> = {
   "restart-pod": "Pod 재시작",
+  "isolate-pod": "트래픽에서 빼기",
+  "delete-pod": "Pod 삭제",
 };
 
 // 조치 기록 화면의 '조치' 거르기 순서입니다.
-export const ACTION_KINDS: readonly ActionKind[] = ["restart-pod"];
+export const ACTION_KINDS: readonly ActionKind[] = [
+  "restart-pod",
+  "isolate-pod",
+  "delete-pod",
+];
 
 export const RESULT_LABEL: Record<ActionResult, string> = {
   succeeded: "성공",
@@ -39,6 +47,11 @@ const ERROR_SENTENCE: Record<string, string> = {
   "target-changed":
     "같은 이름의 다른 Pod로 바뀌었습니다. 목록을 다시 보고 실행합니다.",
   "target-terminating": "Pod가 이미 지워지는 중입니다.",
+  "target-isolated": "이미 트래픽에서 뺀 Pod입니다. 격리된 Pod에서 지웁니다.",
+  "target-not-isolated":
+    "격리된 Pod만 지울 수 있습니다. 먼저 트래픽에서 뺍니다.",
+  "cannot-isolate":
+    "이 Pod는 트래픽에서 뺄 수 없습니다(이 Pod를 고르는 Service가 없거나 떼어 낼 라벨이 없음).",
   "action-in-progress": "이 대상에 실행 중인 조치가 있습니다.",
   "kube-forbidden": "서버에 이 조치 권한이 없습니다(RBAC Role).",
   "kube-error": "쿠버네티스가 조치를 거부했습니다.",
@@ -55,12 +68,31 @@ export function isUnknownOutcome(code: string): boolean {
   return code === NETWORK_ERROR || code === UNEXPECTED_BODY;
 }
 
+// 라벨을 key=value로 이어 씁니다(예: app=demo-app, tier=web).
+export function labelText(labels: Readonly<Record<string, string>>): string {
+  return Object.entries(labels)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(", ");
+}
+
 function successSentence(item: ActionItem): string {
   switch (item.action) {
     case "restart-pod":
       return item.replicaSet === undefined
         ? "Pod를 지웠습니다."
         : `Pod를 지웠습니다. ReplicaSet ${item.replicaSet}이 새 Pod를 만듭니다.`;
+    case "isolate-pod": {
+      const isolation = item.isolation;
+      const removed =
+        isolation === undefined
+          ? "트래픽에서 뺐습니다."
+          : `Service ${isolation.services.join(", ")}에서 뺐습니다(뗀 라벨 ${labelText(isolation.labels)}).`;
+      return item.replicaSet === undefined
+        ? removed
+        : `${removed} ReplicaSet ${item.replicaSet}이 대신할 새 Pod를 만듭니다.`;
+    }
+    case "delete-pod":
+      return "격리된 Pod를 지웠습니다.";
   }
 }
 
@@ -73,6 +105,11 @@ export function actionSentence(item: ActionItem): string {
   return item.kubeStatus === undefined
     ? sentence
     : `HTTP ${item.kubeStatus} · ${sentence}`;
+}
+
+// 성공한 '트래픽에서 빼기'입니다. 타임라인에 '격리됨' 배지를 붙입니다(docs/guides/T23.md 결정 21).
+export function isIsolation(item: ActionItem): boolean {
+  return item.action === "isolate-pod" && item.result === "succeeded";
 }
 
 export function actionTone(item: ActionItem): Tone {
@@ -147,11 +184,30 @@ export function formatActionTime(at: number, now: number): string {
     : `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${clock}`;
 }
 
-// ── 재시작(결정 17, 18) ──
+// ── 버튼 끄기(T21 결정 18, T23 결정 17) ──
 
 // 버튼을 끌 이유입니다. 누를 수 있으면 undefined입니다.
 // actionNamespaces가 undefined면 아직 목록을 받지 못한 것입니다.
-export function restartBlockReason(
+// 서버와 같이 삭제는 격리된 Pod만, 재시작·트래픽에서 빼기는 격리되지 않은 Pod만 받습니다.
+export function actionBlockReason(
+  action: ActionKind,
+  pod: PodRef,
+  item: PodItem | undefined,
+  actionNamespaces: readonly string[] | undefined,
+): string | undefined {
+  const common = commonBlockReason(pod, item, actionNamespaces);
+  if (common !== undefined) {
+    return common;
+  }
+  if (action === "delete-pod") {
+    return isIsolated(item)
+      ? undefined
+      : "격리된 Pod만 지울 수 있습니다. 먼저 트래픽에서 뺍니다.";
+  }
+  return isIsolated(item) ? "이미 트래픽에서 뺀 Pod입니다." : undefined;
+}
+
+function commonBlockReason(
   pod: PodRef,
   item: PodItem | undefined,
   actionNamespaces: readonly string[] | undefined,
@@ -182,7 +238,7 @@ export interface ImpactRow {
 }
 
 export interface RestartImpact {
-  // 새 Pod를 만들 ReplicaSet입니다. 없으면 지운 Pod가 다시 생기지 않습니다.
+  // 새 Pod를 만들 ReplicaSet입니다. 없으면 지운(뺀) Pod를 대신할 Pod가 생기지 않습니다.
   replicaSet?: string;
   deployment?: string;
   // 같은 Deployment(없으면 같은 ReplicaSet)의 다른 Pod입니다. 지워지는 중인 Pod는 뺍니다. 이름순입니다.
@@ -237,11 +293,33 @@ function impactRow(item: PodItem): ImpactRow {
   };
 }
 
-// 재시작하면 트래픽을 받을 Pod와 경고입니다. 화면이 받은 목록(스트림)으로 계산합니다(결정 17).
+// 영향을 계산하는 조치입니다. 문장만 다릅니다.
+export type ImpactAction = "restart-pod" | "isolate-pod";
+
+const IMPACT_TEXT: Record<
+  ImpactAction,
+  { noController: string; verb: string }
+> = {
+  "restart-pod": {
+    noController:
+      "이 Pod를 다시 만들 컨트롤러가 없습니다. 지우면 다시 생기지 않습니다.",
+    verb: "재시작하면",
+  },
+  "isolate-pod": {
+    noController:
+      "대신할 Pod를 만들 컨트롤러가 없습니다. 빼면 트래픽을 받는 Pod가 하나 줄어듭니다.",
+    verb: "빼면",
+  },
+};
+
+// 재시작하거나 트래픽에서 빼면 트래픽을 받을 Pod와 경고입니다. 화면이 받은 목록(스트림)으로 계산합니다
+// (T21 결정 17, T23 결정 15). 이미 격리된 Pod는 트래픽을 받지 않으므로 다른 Pod에 넣지 않습니다.
 export function restartImpact(
   target: PodItem,
   pods: readonly PodItem[],
+  action: ImpactAction = "restart-pod",
 ): RestartImpact {
+  const text = IMPACT_TEXT[action];
   const replicaSet = target.kube?.replicaSet;
   const deployment = target.deployment;
   const sameGroup = (item: PodItem): boolean => {
@@ -259,23 +337,22 @@ export function restartImpact(
         item.pod.name !== target.pod.name &&
         sameGroup(item) &&
         item.kube !== undefined &&
-        !item.kube.terminating,
+        !item.kube.terminating &&
+        item.kube.isolation === undefined,
     )
     .sort((a, b) => (a.pod.name < b.pod.name ? -1 : 1));
   const serving = others.filter(isServing).length;
 
   const warnings: string[] = [];
   if (replicaSet === undefined) {
-    warnings.push(
-      "이 Pod를 다시 만들 컨트롤러가 없습니다. 지우면 다시 생기지 않습니다.",
-    );
+    warnings.push(text.noController);
   }
   // 트래픽을 받지 못하는 다른 Pod(준비 안 됨, 위험)입니다.
   const troubled = others.filter((item) => !isServing(item));
   const after =
     serving === 0
       ? "새 Pod가 준비될 때까지 트래픽을 받을 Pod가 없습니다."
-      : `지금 재시작하면 새 Pod가 준비될 때까지 Pod ${serving}개가 트래픽을 받습니다.`;
+      : `지금 ${text.verb} 새 Pod가 준비될 때까지 Pod ${serving}개가 트래픽을 받습니다.`;
   const [first] = troubled;
   if (first !== undefined) {
     const who =
@@ -294,4 +371,35 @@ export function restartImpact(
     serving,
     warnings,
   };
+}
+
+// ── 트래픽에서 빼기(T23 결정 15) ──
+
+// '실행하면' 단계입니다. 계획을 아직 받지 못했으면 undefined를 넘깁니다.
+export function isolateSteps(plan: IsolationPlan | undefined): string[] {
+  if (plan === undefined) {
+    return ["서버에서 뗄 라벨과 빠질 Service를 확인하는 중입니다."];
+  }
+  return [
+    `Pod 라벨을 바꿉니다. 떼는 라벨: ${labelText(plan.labels)} · 붙이는 라벨: glasspod/isolated=true`,
+    `Service ${plan.services.join(", ")}이 이 Pod로 트래픽을 보내지 않습니다.`,
+    ...(plan.replicaSet === undefined
+      ? []
+      : [`ReplicaSet ${plan.replicaSet}이 대신할 새 Pod를 만듭니다.`]),
+    "이 Pod는 지우지 않고 남습니다. 지표와 snapshot을 계속 받습니다.",
+  ];
+}
+
+// ── 격리된 Pod 화면(T23 결정 18) ──
+
+// 격리된 Pod를 늦게 뺀 것부터 둡니다. 격리 시각을 모르면 맨 뒤, 같으면 이름순입니다.
+export function isolatedPods(pods: readonly PodItem[]): PodItem[] {
+  return pods
+    .filter(isIsolated)
+    .sort(
+      (a, b) =>
+        (b.kube?.isolation?.at ?? -Infinity) -
+          (a.kube?.isolation?.at ?? -Infinity) ||
+        (a.pod.name < b.pod.name ? -1 : a.pod.name > b.pod.name ? 1 : 0),
+    );
 }

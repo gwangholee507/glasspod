@@ -8,6 +8,7 @@ import type {
   ActionErrorBody,
   ActionsBody,
   ApiErrorBody,
+  IsolationPlanBody,
   PodRef,
   QueryErrorCode,
   StatusChangesBody,
@@ -143,6 +144,35 @@ export function createApp(deps: AppDependencies): Express {
     );
     response.status(reply.status).json(reply.body);
   });
+
+  // 트래픽에서 빼기 미리 보기입니다(docs/guides/T23.md 결정 10). 뗄 라벨, 빠질 Service, 대신할 Pod를 만들 ReplicaSet입니다.
+  // 쿠버네티스에서 Pod·ReplicaSet·Service를 읽으므로 최대 10초씩 걸릴 수 있습니다. 기록하지 않습니다.
+  app.get(
+    "/api/pods/:namespace/:name/isolation-plan",
+    async (request, response) => {
+      const pod: PodRef = {
+        namespace: request.params.namespace,
+        name: request.params.name,
+      };
+      const outcome = await actions.previewIsolation(pod);
+      if (!outcome.ok) {
+        sendError(
+          response,
+          outcome.failure.status,
+          outcome.failure.error,
+          outcome.failure.detail,
+        );
+        return;
+      }
+      const body: IsolationPlanBody = {
+        serverTime: now(),
+        pod,
+        uid: outcome.uid,
+        plan: outcome.plan,
+      };
+      response.json(body);
+    },
+  );
 
   // 최근 30분 판단 변화입니다. 일어난 순서이고, 최근 2,000건까지입니다.
   app.get("/api/status-changes", async (request, response) => {

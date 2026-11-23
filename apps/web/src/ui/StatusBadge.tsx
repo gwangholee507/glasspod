@@ -1,4 +1,5 @@
 // 상태 배지와 강조 색입니다(design.md 12장 '상태 배지와 강조 색', docs/guides/T18.md '색').
+// '격리됨'은 판단이 아니라 조치 결과라 판단 배지와 따로 둡니다(docs/guides/T23.md 결정 22).
 import type { PodStatus } from "@glasspod/protocol";
 import { STATUS_LABEL, statusTone } from "../view/podText.js";
 import type { Tone } from "../view/podText.js";
@@ -38,3 +39,16 @@ export function StatusBadge({ status }: { status: PodStatus }) {
     </span>
   );
 }
+
+// 트래픽에서 뺀 Pod의 배지입니다. 흰 면, Glass cyan 테두리, Deep teal 글자(design.md 12장)입니다.
+export function IsolatedBadge() {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-white px-2.5 py-0.5 text-xs font-semibold whitespace-nowrap text-deep-teal ring-1 ring-glass-cyan ring-inset">
+      <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
+      격리됨
+    </span>
+  );
+}
+
+// '격리됨' 묶음과 타임라인의 점입니다. 배지처럼 흰 면에 Glass cyan 테두리입니다.
+export const ISOLATED_DOT = "bg-white ring-2 ring-glass-cyan ring-inset";

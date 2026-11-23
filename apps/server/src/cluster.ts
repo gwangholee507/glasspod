@@ -6,6 +6,8 @@ import type {
   V1Pod,
   V1ReplicaSet,
 } from "@kubernetes/client-node";
+import type { PodIsolation } from "@glasspod/protocol";
+import { readIsolation } from "./isolation.js";
 
 export interface PodTermination {
   container: string;
@@ -27,6 +29,8 @@ export interface PodSummary {
   ip: string | undefined;
   replicaSet: string | undefined;
   createdAt: string | undefined;
+  // 트래픽에서 뺀 Pod만 있습니다(표시 라벨과 주석, docs/guides/T23.md 결정 12).
+  isolation?: PodIsolation;
 }
 
 export interface DeploymentSummary {
@@ -57,6 +61,7 @@ const POD_FIELDS = [
   "lastTermination",
   "ip",
   "replicaSet",
+  "isolation",
 ] as const satisfies readonly (keyof PodSummary)[];
 const DEPLOYMENT_FIELDS = [
   "desired",
@@ -108,6 +113,7 @@ function identity(metadata: V1ObjectMeta | undefined): {
 }
 
 export function summarizePod(pod: V1Pod): PodSummary {
+  const isolation = readIsolation(pod.metadata);
   const statuses = pod.status?.containerStatuses ?? [];
 
   // 지금 끝나 있는 컨테이너(state)와 직전에 끝난 컨테이너(lastState) 가운데 가장 최근 것입니다.
@@ -151,6 +157,7 @@ export function summarizePod(pod: V1Pod): PodSummary {
     ip: pod.status?.podIP || undefined,
     replicaSet: controllerName(pod.metadata, "ReplicaSet"),
     createdAt: isoTime(pod.metadata?.creationTimestamp),
+    ...(isolation === undefined ? {} : { isolation }),
   };
 }
 

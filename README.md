@@ -87,7 +87,7 @@ glasspod.state('app.mode', 'ready');                    // 상태 등록, 바뀌
 - snapshot: `GET /api/pods/:namespace/:name/snapshot`으로 Pod 하나의 지금 상태(상태 값, 처리 중인 요청과 경과 시간, 프로세스 정보)를 그 Pod의 SDK에 물어봄. 5초 안에 답이 없으면 응답 없음(504)으로 알려 앱이 막혔는지 보여 줌
 - 데모 앱: SDK를 넣은 주문 앱 흉내(`examples/demo-app`)와 부하 스크립트. 관리 포트의 HTTP API로 느려짐, 이벤트 루프 막힘, 예외 폭주, 크래시, 메모리 증가를 일부러 일으킴. `npm run dev:server`, `npm run demo`, `npm run demo:load`로 노트북에서 띄워 볼 수 있음
 - 데모 앱 배포: 데모 앱 이미지(`npm run demo:image`)와 로컬 클러스터용 매니페스트(`deploy/demo/`). `kubectl apply -f deploy/demo/`로 `glasspod-demo` namespace에 데모 앱 Pod 3개, Service, 부하 Pod를 띄움. SDK는 Pod 이름과 namespace를 Downward API로 받고, 고장 스위치는 `kubectl port-forward`로 씀. Pod를 지울 때는 5초 기다린 뒤 종료 신호를 받아, 재시작이나 롤아웃 중에도 부하 요청을 잃지 않음
-- 서버 배포: 서버 이미지(`npm run server:image`)와 매니페스트(`deploy/server/`). `kubectl apply -f deploy/server/`로 `glasspod` namespace에 서버를 띄우면 데모 앱 Pod의 SDK가 클러스터 안 주소로 붙음. 서버는 자기 ServiceAccount로 쿠버네티스를 보고, 권한은 감시 대상 namespace에 한정된 Role(읽기와 Pod 삭제)로 줌. 노트북에서는 `kubectl port-forward`로 서버 API에 닿음
+- 서버 배포: 서버 이미지(`npm run server:image`)와 매니페스트(`deploy/server/`). `kubectl apply -f deploy/server/`로 `glasspod` namespace에 서버를 띄우면 데모 앱 Pod의 SDK가 클러스터 안 주소로 붙음. 서버는 자기 ServiceAccount로 쿠버네티스를 보고, 권한은 감시 대상 namespace에 한정된 Role(읽기, Pod 삭제와 라벨 바꾸기, Service 읽기)로 줌. 노트북에서는 `kubectl port-forward`로 서버 API에 닿음
 - 쿠버네티스 watch: 서버가 정한 namespace의 Pod, Deployment, ReplicaSet, 클러스터 이벤트를 받아 Pod마다 지금 상태(실행 단계, 준비, 재시작 횟수, OOMKilled 같은 마지막 종료 이유)를 들고 있음. 노트북에서는 `GLASSPOD_KUBE_CONTEXT=docker-desktop npm run dev:server`처럼 볼 클러스터의 context를 정해 줌
 - 서버 기록 보관: SDK가 보낸 metrics와 event, 연결 기록, 지워진 Pod의 마지막 모습을 Pod별로 최근 30분 들고 있음(지금은 메모리, `GLASSPOD_STORE=memory`). 빠진 메시지(`seq` 빈틈)와 counter 리셋(앱 재시작)을 알아내고, 5분마다 보관 현황을 로그에 남김
 - 상태 판단: 서버가 1초마다 Pod마다 SDK 신호와 쿠버네티스 상태를 합쳐 정상, 앱 멈춤 의심(연결은 열렸는데 metrics가 끊김), 연결 끊김, 재시작, Pod 이상(CrashLoopBackOff·이미지 오류), 준비 안 됨, 시작 중, SDK 없음, 종료됨 가운데 하나로 판단함. 재시작이면 OOMKilled 같은 종료 이유와 재시작 전 프로세스가 마지막으로 보낸 예외를 원인 후보로 찾음. 지워진 Pod의 남은 SDK 연결은 서버가 닫음
@@ -99,7 +99,9 @@ glasspod.state('app.mode', 'ready');                    // 상태 등록, 바뀌
 
 - 조치 공통과 Pod 재시작: 상세 화면의 '재시작'을 누르면 오른쪽 서랍이 대상, 일어날 일, 재시작하는 동안 트래픽을 받을 같은 Deployment의 Pod와 그 판단, 경고를 보여 주고, 확인하면 서버가 쿠버네티스에서 Pod를 지움(새 Pod는 ReplicaSet이 만듦). 서버는 `GLASSPOD_ACTION_NAMESPACES`에 적은 namespace에서만 조치하고, 화면이 확인한 Pod와 같은 Pod인지(uid) 보고 실행함. 모든 조치는 성공·실패와 함께 기록되어 조치 기록 화면(`/actions`), 상세의 조치 기록 칸, 타임라인에 실시간으로 보임
 
-트래픽에서 빼기(격리)와 스케일 조정은 다음 작업입니다. '트래픽에서 빼기' 버튼과 '격리된 Pod' 메뉴는 그때까지 흐리게 보입니다.
+- 트래픽에서 빼기(격리)와 격리된 Pod: 상세 화면의 '트래픽에서 빼기'를 누르면 서랍이 뗄 라벨(데모 앱은 `app=demo-app`)과 빠질 Service, 대신할 Pod를 만들 ReplicaSet을 미리 보여 주고, 확인하면 서버가 그 라벨을 떼고 `glasspod/isolated=true` 라벨과 격리 정보 주석을 붙임. 새 Pod가 트래픽을 받는 동안 뺀 Pod는 살아 있어 지표와 snapshot을 계속 볼 수 있음. 격리된 Pod는 목록 맨 아래 '격리됨' 묶음과 격리된 Pod 화면(`/isolated`)에 모이고, 조사가 끝나면 거기서 지움. 격리 정보는 Pod에 남아 서버를 다시 시작해도 사라지지 않음
+
+스케일 조정은 다음 작업입니다.
 
 첫 마일스톤은 [대표 시나리오](docs/design.md#6-대표-시나리오-pod-하나가-느려질-때)를 로컬 클러스터에서 처음부터 끝까지 돌려 보는 것입니다. 느려진 Pod 하나를 화면에서 찾고, 트래픽에서 뺀 채로 원인을 확인한 뒤 삭제합니다.
 

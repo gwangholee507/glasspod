@@ -404,6 +404,27 @@ describe("seriesPods", () => {
       MAX_SERIES_SIBLINGS + 1,
     );
   });
+
+  it("compares an isolated pod with its original deployment", () => {
+    const isolated = {
+      ...listItem("orders-x"),
+      kube: {
+        uid: "u",
+        phase: "Running",
+        ready: true,
+        terminating: false,
+        restarts: 0,
+        isolation: { labels: { app: "orders" }, deployment: "orders" },
+      },
+    };
+    expect(
+      seriesPods(isolated, [
+        isolated,
+        listItem("orders-a", "orders"),
+        listItem("other", "payments"),
+      ]).map((pod) => pod.name),
+    ).toEqual(["orders-x", "orders-a"]);
+  });
 });
 
 describe("podSeries", () => {

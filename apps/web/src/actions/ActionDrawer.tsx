@@ -4,7 +4,7 @@ import type { ActionItem, PodRef, PodStatus } from "@glasspod/protocol";
 import { useEffect, useId, useRef } from "react";
 import type { ReactNode } from "react";
 import { AlertIcon, CloseIcon, InfoIcon } from "../ui/icons.js";
-import { StatusBadge } from "../ui/StatusBadge.js";
+import { IsolatedBadge, StatusBadge } from "../ui/StatusBadge.js";
 import {
   actionSentence,
   errorSentence,
@@ -22,12 +22,15 @@ export interface ActionDrawerProps {
   icon: ReactNode;
   pod: PodRef;
   status: PodStatus | undefined;
+  // 트래픽에서 뺀 Pod면 대상 카드에 '격리됨' 배지를 붙입니다(docs/guides/T23.md 결정 16).
+  isolated?: boolean;
   // 대상 카드 아랫줄입니다(namespace · Deployment 등).
   facts: readonly string[];
   // '실행하면' 단계입니다.
   steps: readonly string[];
-  impactTitle: string;
-  impact: ReactNode;
+  // 영향 칸입니다. 트래픽에 영향이 없는 조치(격리된 Pod 삭제)는 없습니다.
+  impactTitle?: string;
+  impact?: ReactNode;
   warnings: readonly string[];
   notice: string;
   confirmLabel: string;
@@ -43,6 +46,7 @@ export function ActionDrawer({
   icon,
   pod,
   status,
+  isolated = false,
   facts,
   steps,
   impactTitle,
@@ -112,6 +116,7 @@ export function ActionDrawer({
           <div className="rounded-xl bg-tab px-4 py-3">
             <div className="flex flex-wrap items-center gap-2">
               {status !== undefined && <StatusBadge status={status} />}
+              {isolated && <IsolatedBadge />}
               <span className="font-mono text-sm break-all text-slate-900">
                 {pod.name}
               </span>
@@ -135,12 +140,14 @@ export function ActionDrawer({
             </ol>
           </div>
 
-          <div>
-            <h3 className="text-sm font-semibold text-slate-800">
-              {impactTitle}
-            </h3>
-            <div className="mt-2.5">{impact}</div>
-          </div>
+          {impactTitle !== undefined && (
+            <div>
+              <h3 className="text-sm font-semibold text-slate-800">
+                {impactTitle}
+              </h3>
+              <div className="mt-2.5">{impact}</div>
+            </div>
+          )}
 
           {warnings.map((warning) => (
             <p

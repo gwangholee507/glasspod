@@ -1,10 +1,17 @@
 // 가운데 Pod 목록입니다: 찾기, 탭, 묶음, 항목(docs/guides/T18.md 결정 7~11, 14~16, 19, 20).
+// 트래픽에서 뺀 Pod는 맨 아래 '격리됨' 묶음에 두고 강조 색을 칠하지 않습니다(docs/guides/T23.md 결정 19).
 import type { PodItem, PodListBody, PodRef } from "@glasspod/protocol";
 import { useState } from "react";
 import { Link } from "react-router";
 import type { PodStreamStatus } from "../api/podStream.js";
 import { SearchIcon } from "../ui/icons.js";
-import { StatusBadge, TONE_BAR, TONE_DOT } from "../ui/StatusBadge.js";
+import {
+  ISOLATED_DOT,
+  IsolatedBadge,
+  StatusBadge,
+  TONE_BAR,
+  TONE_DOT,
+} from "../ui/StatusBadge.js";
 import {
   formatDuration,
   formatMegabytes,
@@ -13,7 +20,13 @@ import {
   statusTone,
   timeLabel,
 } from "../view/podText.js";
-import { filterPods, groupPods, needsAttention } from "../view/podView.js";
+import {
+  ISOLATED_GROUP_KEY,
+  filterPods,
+  groupPods,
+  isIsolated,
+  needsAttention,
+} from "../view/podView.js";
 import type { ListTab, PodGroup } from "../view/podView.js";
 import { podLink } from "./shellContext.js";
 
@@ -170,7 +183,7 @@ function Group({
     <section aria-label={group.title}>
       <h2 className="flex items-center gap-2 border-b border-line px-5 pt-4 pb-2 text-xs text-slate-600">
         <span
-          className={`size-2 rounded-full ${TONE_DOT[group.tone]}`}
+          className={`size-2 rounded-full ${group.key === ISOLATED_GROUP_KEY ? ISOLATED_DOT : TONE_DOT[group.tone]}`}
           aria-hidden="true"
         />
         {group.title} · {group.pods.length}
@@ -212,19 +225,22 @@ function PodCard({
   const tone = statusTone(item.status);
   const { metrics } = item;
   const errors = metrics.http5xxPerMinute;
+  // 일부러 뺀 Pod는 위험 판단이어도 강조하지 않습니다.
+  const isolated = isIsolated(item);
+  const highlight = isolated ? "none" : item.severity;
   return (
     <Link
       to={podLink(item.pod, namespace)}
       aria-current={selected ? "page" : undefined}
       className={[
         "relative block border-b border-line px-5 py-3.5",
-        item.severity === "critical"
+        highlight === "critical"
           ? "bg-warning-wash"
           : "bg-white hover:bg-paper",
         selected ? "ring-2 ring-glass-cyan ring-inset" : "",
       ].join(" ")}
     >
-      {item.severity !== "none" && (
+      {highlight !== "none" && (
         <span
           className={`absolute inset-y-0 left-0 w-1 ${TONE_BAR[tone]}`}
           aria-hidden="true"
@@ -232,6 +248,7 @@ function PodCard({
       )}
       <div className="flex items-center gap-2">
         <StatusBadge status={item.status} />
+        {isolated && <IsolatedBadge />}
         {errors !== undefined && errors > 0 && (
           <span className="rounded border border-warning-line bg-warning-wash px-1.5 py-px text-xs font-medium whitespace-nowrap text-warning-ink">
             5xx {errors}/분
