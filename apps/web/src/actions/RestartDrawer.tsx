@@ -80,7 +80,7 @@ export function RestartDrawer({
     <ActionDrawer
       title="Pod 재시작"
       icon={<RotateIcon className="size-4" />}
-      pod={pod}
+      targetName={pod.name}
       status={current?.status}
       facts={[
         pod.namespace,

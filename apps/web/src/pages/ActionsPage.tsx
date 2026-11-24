@@ -2,10 +2,13 @@
 // 가운데 Pod 목록 칸 없이 넓게 씁니다. namespace는 왼쪽 메뉴가 고르고, 여기서는 조치·결과·대상 이름으로 거릅니다.
 import type { ActionKind, ActionResult } from "@glasspod/protocol";
 import { useState } from "react";
-import { Link } from "react-router";
-import { ActionName, ResultBadge } from "../actions/ActionParts.js";
+import {
+  ActionName,
+  ActionTargetLink,
+  ResultBadge,
+} from "../actions/ActionParts.js";
 import { useActionHistory } from "../api/useActionHistory.js";
-import { podLink, useShell } from "../shell/shellContext.js";
+import { useShell } from "../shell/shellContext.js";
 import { ChevronDownIcon, InfoIcon, SearchIcon } from "../ui/icons.js";
 import {
   ACTION_KINDS,
@@ -128,13 +131,11 @@ export function ActionsPage() {
                     <ActionName action={item.action} />
                   </td>
                   <td className="px-3 py-3.5">
-                    <Link
-                      to={podLink(item.target, namespace)}
-                      className="font-mono text-xs break-all text-deep-teal hover:underline"
-                    >
-                      {showNamespace ? `${item.target.namespace}/` : ""}
-                      {item.target.name}
-                    </Link>
+                    <ActionTargetLink
+                      item={item}
+                      namespace={namespace}
+                      showNamespace={showNamespace}
+                    />
                   </td>
                   <td className="px-3 py-3 whitespace-nowrap text-slate-700">
                     {actorLabel(item.actor)}

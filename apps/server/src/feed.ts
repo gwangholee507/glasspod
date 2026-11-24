@@ -92,7 +92,10 @@ export class PodFeed {
     const nextDeployments = new Map<string, Tracked<DeploymentItem>>();
     const summaries = this.cluster.deployments.list().sort(compareRefs);
     for (const summary of summaries) {
-      const item = deploymentItem(summary);
+      const item = deploymentItem(
+        summary,
+        this.cluster.hpaOf(summary.namespace, summary.name),
+      );
       nextDeployments.set(podKey(item), { item, json: JSON.stringify(item) });
     }
 

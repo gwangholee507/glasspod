@@ -164,3 +164,12 @@ export function TrashIcon({ className }: IconProps) {
     </Icon>
   );
 }
+
+// 스케일 조정(Pod 두 칸과 위아래 화살표)
+export function ScaleIcon({ className }: IconProps) {
+  return (
+    <Icon className={className}>
+      <path d="M3 4h10v6H3zM3 14h10v6H3zM18.5 4v16M15.5 7l3-3 3 3M15.5 17l3 3 3-3" />
+    </Icon>
+  );
+}

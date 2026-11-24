@@ -2,7 +2,7 @@
 // 머리줄, '무슨 일이 있었나', 지표 그래프, snapshot, 조치 기록을 위에서 아래로 둡니다.
 // 판단 배지와 문장은 목록 스트림의 항목을 쓰고(없으면 상세 본문의 항목), 상세와 시계열은 그 항목이 바뀔 때 다시 받습니다.
 // 조치 버튼을 누르면 오른쪽 서랍에서 확인한 뒤 실행합니다(docs/guides/T21.md, docs/guides/T23.md).
-import type { ActionKind, PodRef } from "@glasspod/protocol";
+import type { PodRef } from "@glasspod/protocol";
 import { useCallback, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import { DeleteDrawer } from "../actions/DeleteDrawer.js";
@@ -17,11 +17,12 @@ import { SnapshotPanel } from "../detail/SnapshotPanel.js";
 import { WhatHappened } from "../detail/WhatHappened.js";
 import { overviewLink, useShell } from "../shell/shellContext.js";
 import {
-  ACTION_KINDS,
+  POD_ACTION_KINDS,
   actionBlockReason,
   isActionOn,
   mergeActions,
 } from "../view/actionText.js";
+import type { PodActionKind } from "../view/actionText.js";
 
 export function PodDetailPage() {
   // 라우트가 두 값을 모두 정하므로 비어 있을 수 없습니다.
@@ -43,16 +44,16 @@ export function PodDetailPage() {
 
   // 열린 서랍입니다. Pod를 바꾸면 닫힙니다(아래 podKey 비교).
   const [drawer, setDrawer] = useState<
-    { podKey: string; action: ActionKind } | undefined
+    { podKey: string; action: PodActionKind } | undefined
   >();
   const closeDrawer = useCallback(() => setDrawer(undefined), []);
   const actionNamespaces = stream.state?.list.actionNamespaces;
   const blocked = Object.fromEntries(
-    ACTION_KINDS.map((action) => [
+    POD_ACTION_KINDS.map((action) => [
       action,
       actionBlockReason(action, pod, streamItem, actionNamespaces),
     ]),
-  ) as Record<ActionKind, string | undefined>;
+  ) as Record<PodActionKind, string | undefined>;
 
   // 상세 본문의 조치와 그 뒤 스트림으로 온 이 Pod의 조치를 합칩니다(결정 20). 늦은 것부터입니다.
   const streamActions = stream.state?.actions;

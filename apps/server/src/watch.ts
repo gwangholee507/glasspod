@@ -1,6 +1,11 @@
-// 쿠버네티스 watch입니다. namespace마다 Deployment·ReplicaSet·Pod·이벤트 informer를 두고 ClusterState를 채웁니다.
-// 읽기만 합니다(list와 watch). 결정과 로그 형식은 docs/guides/T12.md에 있습니다.
-import { AppsV1Api, CoreV1Api, makeInformer } from "@kubernetes/client-node";
+// 쿠버네티스 watch입니다. namespace마다 Deployment·ReplicaSet·Pod·이벤트·HPA informer를 두고 ClusterState를 채웁니다.
+// 읽기만 합니다(list와 watch). 결정과 로그 형식은 docs/guides/T12.md, HPA는 docs/guides/T24.md 결정 9에 있습니다.
+import {
+  AppsV1Api,
+  AutoscalingV2Api,
+  CoreV1Api,
+  makeInformer,
+} from "@kubernetes/client-node";
 import type {
   CoreV1Event,
   Informer,
@@ -10,15 +15,18 @@ import type {
   V1Deployment,
   V1Pod,
   V1ReplicaSet,
+  V2HorizontalPodAutoscaler,
 } from "@kubernetes/client-node";
 import {
   summarizeDeployment,
+  summarizeHpa,
   summarizePod,
   summarizeReplicaSet,
 } from "./cluster.js";
 import type {
   ClusterState,
   DeploymentSummary,
+  HpaSummary,
   PodSummary,
   ReplicaSetSummary,
   SetResult,
@@ -37,7 +45,12 @@ const RETRY_MAX_MS = 30_000;
 // 클러스터 이벤트의 message는 이 길이까지만 로그에 씁니다.
 const MAX_MESSAGE_LENGTH = 200;
 
-type ResourceName = "deployments" | "replicasets" | "pods" | "events";
+type ResourceName =
+  | "deployments"
+  | "replicasets"
+  | "pods"
+  | "events"
+  | "horizontalpodautoscalers";
 
 interface Handlers<T extends KubernetesObject> {
   // 처음 list가 끝나기 전이면 synced가 false입니다.
@@ -198,9 +211,17 @@ function replicaSetLogFields(replicaSet: ReplicaSetSummary): LogFields {
   };
 }
 
+function hpaLogFields(hpa: HpaSummary): LogFields {
+  return {
+    target: hpa.target,
+    minReplicas: hpa.minReplicas,
+    maxReplicas: hpa.maxReplicas,
+  };
+}
+
 // 요약이 처음 들어왔거나 바뀐 때만 한 줄 남깁니다. 바뀐 때는 대상 바로 뒤에 changed=를 씁니다.
 function logSet<K>(
-  kind: "pod" | "deployment" | "replicaset",
+  kind: "pod" | "deployment" | "replicaset" | "hpa",
   subject: LogFields,
   result: SetResult<K>,
   details: LogFields,
@@ -253,6 +274,7 @@ export class ClusterWatcher {
   ) {
     const core = connection.config.makeApiClient(CoreV1Api);
     const apps = connection.config.makeApiClient(AppsV1Api);
+    const autoscaling = connection.config.makeApiClient(AutoscalingV2Api);
 
     for (const namespace of namespaces) {
       // 이 순서로 시작합니다. ReplicaSet을 먼저 받아야 Pod 로그에 Deployment가 나옵니다.
@@ -369,7 +391,35 @@ export class ClusterWatcher {
           remove: () => {},
         },
       );
-      this.resources.push([deployments, replicaSets, pods, events]);
+      // 스케일 조정의 HPA 경고에 씁니다(T24 결정 9). 권한이 없으면 이 watch만 실패하고 다시 시도합니다.
+      const hpas = new WatchedResource<V2HorizontalPodAutoscaler>(
+        connection,
+        "horizontalpodautoscalers",
+        namespace,
+        `/apis/autoscaling/v2/namespaces/${namespace}/horizontalpodautoscalers`,
+        () => autoscaling.listNamespacedHorizontalPodAutoscaler({ namespace }),
+        {
+          upsert: (object) => {
+            const summary = summarizeHpa(object);
+            logSet(
+              "hpa",
+              { hpa: `${namespace}/${summary.name}` },
+              state.hpas.set(summary),
+              hpaLogFields(summary),
+            );
+          },
+          remove: (object) => {
+            const removed = state.hpas.delete(
+              namespace,
+              object.metadata?.name ?? "",
+            );
+            if (removed !== undefined) {
+              log.info("hpa deleted", { hpa: `${namespace}/${removed.name}` });
+            }
+          },
+        },
+      );
+      this.resources.push([deployments, replicaSets, pods, events, hpas]);
     }
   }
 

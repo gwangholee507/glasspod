@@ -165,13 +165,24 @@ export interface PodItem {
   metrics: PodListMetrics;
 }
 
+// 이 Deployment를 겨냥한 HPA입니다(docs/guides/T24.md 결정 3, 9). HPA는 수동으로 바꾼 replica 수를 다시 덮어씁니다.
+export interface DeploymentHpa {
+  name: string;
+  minReplicas: number;
+  maxReplicas: number;
+}
+
 // 쿠버네티스 Deployment 요약입니다.
 export interface DeploymentItem {
   namespace: string;
   name: string;
+  // 스케일 조정이 expectedUid로 보냅니다(T24 결정 5).
+  uid: string;
   desired: number;
   ready: number;
   available: number;
+  // 이 Deployment를 겨냥한 HPA가 있을 때만 있습니다(T24).
+  hpa?: DeploymentHpa;
 }
 
 // GET /api/pods 본문이자 SSE의 pods 이벤트입니다.
@@ -318,9 +329,11 @@ export interface PodListChanges {
 
 // ── 조치(docs/guides/T21.md) ──
 
-// 조치 종류입니다. 스케일 조정(T24)을 여기에 더합니다.
-// restart-pod: Pod 재시작(삭제 → 컨트롤러가 새로 만듦), isolate-pod: 트래픽에서 빼기(T23), delete-pod: 격리된 Pod 삭제(T23)
-export type ActionKind = "restart-pod" | "isolate-pod" | "delete-pod";
+// 조치 종류입니다.
+// restart-pod: Pod 재시작(삭제 → 컨트롤러가 새로 만듦), isolate-pod: 트래픽에서 빼기(T23), delete-pod: 격리된 Pod 삭제(T23),
+// scale-deployment: Deployment의 replica 수 바꾸기(T24). 앞의 셋은 Pod, 스케일은 Deployment가 대상입니다.
+export type ActionKind =
+  "restart-pod" | "isolate-pod" | "delete-pod" | "scale-deployment";
 
 // 조치 요청 본문이 틀렸을 때의 오류 코드입니다. 이 요청은 기록하지 않습니다.
 // invalid-request: 본문이 JSON이 아니거나 모양이 틀림, 모르는 조치, Content-Type이 JSON이 아님(415)
@@ -349,12 +362,20 @@ export interface ActionErrorBody extends ApiErrorBody {
 // 조치를 실행한 쪽입니다. 화면에서 누른 조치는 user('개발자'), 자동 규칙(T28)은 rule입니다(결정 4).
 export type ActionActor = { kind: "user" } | { kind: "rule"; name: string };
 
-// 조치 대상입니다. uid는 화면이 확인한 Pod의 uid(expectedUid)입니다. 스케일(T24)은 Deployment 대상을 더합니다.
+// 조치 대상입니다. uid는 화면이 확인한 대상의 uid(expectedUid)입니다. 대상 종류는 조치가 정합니다(T24 결정 5).
 export interface ActionTarget {
-  kind: "pod";
+  kind: "pod" | "deployment";
   namespace: string;
   name: string;
   uid: string;
+}
+
+// 스케일 조정의 기록입니다(T24 결정 8). to는 요청한 수, from은 서버가 실행할 때 읽은 수(읽기 전에 실패하면 없음),
+// hpa는 실행할 때 이 Deployment를 겨냥하던 HPA 이름입니다.
+export interface ActionScale {
+  from?: number;
+  to: number;
+  hpa?: string;
 }
 
 export type ActionResult = "succeeded" | "failed";
@@ -379,6 +400,8 @@ export interface ActionItem {
   deployment?: string;
   // 트래픽에서 빼기 성공: 실제로 뗀 라벨과 이 Pod를 고르던 Service입니다(T23 결정 11).
   isolation?: { labels: Record<string, string>; services: string[] };
+  // 스케일 조정만: 성공·실패 모두 있습니다(T24 결정 8).
+  scale?: ActionScale;
 }
 
 // 트래픽에서 빼기의 계획입니다(T23 결정 6, 10). 실행할 때도 같은 규칙으로 다시 계산합니다.
@@ -403,9 +426,12 @@ export interface IsolationPlanBody {
 // POST /api/actions 본문입니다.
 export interface ActionRequest {
   action: ActionKind;
+  // Pod 조치는 Pod, 스케일 조정은 Deployment의 namespace와 이름입니다.
   target: { namespace: string; name: string };
-  // 화면이 확인한 대상 Pod의 uid입니다(결정 7). 지금 uid와 다르면 409 target-changed입니다.
+  // 화면이 확인한 대상(Pod 또는 Deployment)의 uid입니다(결정 7). 지금 uid와 다르면 409 target-changed입니다.
   expectedUid: string;
+  // 스케일 조정만: 바꿀 replica 수(0~20 정수, T24 결정 2)입니다. 다른 조치는 무시합니다.
+  replicas?: number;
 }
 
 // POST /api/actions 성공 본문입니다.

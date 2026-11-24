@@ -1,9 +1,15 @@
 import { ApiException } from "@kubernetes/client-node";
 import type { ActionItem, ActionRequest, PodRef } from "@glasspod/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ActionService, kubeFailure, parseActionRequest } from "./actions.js";
+import {
+  ActionService,
+  MAX_SCALE_REPLICAS,
+  kubeFailure,
+  parseActionRequest,
+} from "./actions.js";
 import { ClusterState } from "./cluster.js";
 import type { PodSummary } from "./cluster.js";
+import { scalePatch } from "./kube-actions.js";
 import type { KubeActions } from "./kube-actions.js";
 import { MemoryStore } from "./store/memory.js";
 
@@ -23,6 +29,18 @@ function summary(overrides: Partial<PodSummary> = {}): PodSummary {
     ip: undefined,
     replicaSet: "orders-7d9f8",
     createdAt: undefined,
+    ...overrides,
+  };
+}
+
+const DEPLOYMENT: PodRef = { namespace: "shop", name: "orders" };
+
+function scaleRequest(overrides: Partial<ActionRequest> = {}): ActionRequest {
+  return {
+    action: "scale-deployment",
+    target: DEPLOYMENT,
+    expectedUid: "dep-uid",
+    replicas: 5,
     ...overrides,
   };
 }
@@ -58,6 +76,12 @@ function fakeKube(overrides: Partial<KubeActions> = {}) {
       { name: "other", selector: { app: "payments" } },
     ]),
     patchPod: vi.fn<KubeActions["patchPod"]>(async () => {}),
+    readDeploymentScale: vi.fn<KubeActions["readDeploymentScale"]>(
+      async () => ({ uid: "dep-uid", replicas: 3 }),
+    ),
+    patchDeploymentScale: vi.fn<KubeActions["patchDeploymentScale"]>(
+      async () => {},
+    ),
   };
   return Object.assign(kube, overrides);
 }
@@ -79,6 +103,14 @@ function setup(
     deployment: "orders",
     revision: "1",
     desired: 3,
+  });
+  cluster.deployments.set({
+    namespace: "shop",
+    name: "orders",
+    uid: "dep-uid",
+    desired: 3,
+    ready: 3,
+    available: 3,
   });
   const store = new MemoryStore();
   const kube = fakeKube();
@@ -117,8 +149,28 @@ describe("parseActionRequest", () => {
     ["bad name", { ...request(), target: { namespace: "shop", name: "a/b" } }],
     ["no uid", { action: "restart-pod", target: POD }],
     ["empty uid", { ...request(), expectedUid: "" }],
+    ["scale without replicas", scaleRequest({ replicas: undefined })],
+    ["negative replicas", scaleRequest({ replicas: -1 })],
+    ["too many replicas", scaleRequest({ replicas: MAX_SCALE_REPLICAS + 1 })],
+    ["fractional replicas", scaleRequest({ replicas: 2.5 })],
+    ["string replicas", { ...scaleRequest(), replicas: "3" }],
   ])("rejects %s", (_label, body) => {
     expect(parseActionRequest(body).ok).toBe(false);
+  });
+
+  it("accepts replicas only for scaling, from 0 to the limit", () => {
+    expect(parseActionRequest(scaleRequest({ replicas: 0 }))).toEqual({
+      ok: true,
+      request: scaleRequest({ replicas: 0 }),
+    });
+    expect(
+      parseActionRequest(scaleRequest({ replicas: MAX_SCALE_REPLICAS })).ok,
+    ).toBe(true);
+    // 다른 조치의 replicas는 무시합니다.
+    expect(parseActionRequest({ ...request(), replicas: 99 })).toEqual({
+      ok: true,
+      request: request(),
+    });
   });
 });
 
@@ -428,5 +480,164 @@ describe("ActionService", () => {
     expect(
       await setup().service.previewIsolation({ namespace: "shop", name: "x" }),
     ).toMatchObject({ ok: false, failure: { error: "target-not-found" } });
+  });
+});
+
+describe("ActionService scale-deployment", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("builds the merge patch with the uid precondition", () => {
+    expect(scalePatch("dep-uid", 5)).toEqual({
+      metadata: { uid: "dep-uid" },
+      spec: { replicas: 5 },
+    });
+  });
+
+  it("reads the scale, patches it, and records from, to and the hpa", async () => {
+    const { service, kube, store } = setup();
+    const outcome = await service.run(scaleRequest(), { kind: "user" });
+    expect(kube.readDeploymentScale).toHaveBeenCalledWith("shop", "orders");
+    expect(kube.patchDeploymentScale).toHaveBeenCalledWith(
+      "shop",
+      "orders",
+      "dep-uid",
+      5,
+    );
+    expect(outcome).toEqual({
+      status: 200,
+      item: {
+        id: "id-1",
+        action: "scale-deployment",
+        target: { kind: "deployment", ...DEPLOYMENT, uid: "dep-uid" },
+        actor: { kind: "user" },
+        requestedAt: 1_005,
+        finishedAt: 1_010,
+        result: "succeeded",
+        scale: { from: 3, to: 5 },
+      },
+    });
+    // Pod 상세의 조치 기록에는 Deployment 대상이 들어가지 않습니다.
+    expect(await store.actions({ namespace: "shop" })).toHaveLength(1);
+    expect(
+      await store.actions({ pod: { namespace: "shop", name: "orders" } }),
+    ).toEqual([]);
+
+    const withHpa = setup();
+    withHpa.cluster.hpas.set({
+      namespace: "shop",
+      name: "orders-hpa",
+      uid: "hpa",
+      target: "orders",
+      minReplicas: 3,
+      maxReplicas: 5,
+    });
+    const scaled = await withHpa.service.run(scaleRequest({ replicas: 0 }), {
+      kind: "user",
+    });
+    expect(scaled.item.scale).toEqual({ from: 3, to: 0, hpa: "orders-hpa" });
+  });
+
+  it("checks the deployment in order without calling kubernetes", async () => {
+    const cases: [ReturnType<typeof setup>, ActionRequest, number, string][] = [
+      [
+        setup({ actionNamespaces: [] }),
+        scaleRequest(),
+        403,
+        "action-not-allowed",
+      ],
+      [setup({ kube: null }), scaleRequest(), 503, "kube-unavailable"],
+      [
+        setup(),
+        scaleRequest({ target: { namespace: "shop", name: "gone" } }),
+        404,
+        "target-not-found",
+      ],
+      [setup(), scaleRequest({ expectedUid: "dep-0" }), 409, "target-changed"],
+    ];
+    // 이름이 Deployment와 같은 Pod가 있어도 Pod 요약은 보지 않습니다.
+    cases[2]![0].cluster.pods.set(summary({ name: "gone" }));
+
+    for (const [context, body, status, error] of cases) {
+      const outcome = await context.service.run(body, { kind: "user" });
+      expect(outcome.status).toBe(status);
+      expect(outcome.item).toMatchObject({
+        result: "failed",
+        error,
+        target: { kind: "deployment" },
+        scale: { to: 5 },
+      });
+      expect(outcome.item.scale?.from).toBeUndefined();
+      expect(context.kube.readDeploymentScale).not.toHaveBeenCalled();
+      expect(context.kube.patchDeploymentScale).not.toHaveBeenCalled();
+    }
+  });
+
+  it("refuses a recreated deployment and keeps from when kubernetes fails", async () => {
+    const recreated = setup({
+      kube: fakeKube({
+        readDeploymentScale: async () => ({ uid: "dep-new", replicas: 1 }),
+      }),
+    });
+    const changed = await recreated.service.run(scaleRequest(), {
+      kind: "user",
+    });
+    expect(changed.status).toBe(409);
+    expect(changed.item).toMatchObject({
+      error: "target-changed",
+      scale: { to: 5 },
+    });
+    expect(changed.item.scale?.from).toBeUndefined();
+
+    const forbidden = setup({
+      kube: fakeKube({
+        patchDeploymentScale: async () => {
+          throw new ApiException(403, "", "", {});
+        },
+      }),
+    });
+    const failed = await forbidden.service.run(scaleRequest(), {
+      kind: "user",
+    });
+    expect(failed.status).toBe(502);
+    expect(failed.item).toMatchObject({
+      error: "kube-forbidden",
+      kubeStatus: 403,
+      scale: { from: 3, to: 5 },
+    });
+  });
+
+  it("runs pod and deployment actions with the same name side by side", async () => {
+    let finish: () => void = () => {};
+    const patchDeploymentScale = vi
+      .fn<KubeActions["patchDeploymentScale"]>(async () => {})
+      .mockImplementationOnce(
+        () => new Promise<void>((resolve) => (finish = resolve)),
+      );
+    const { service, cluster } = setup({
+      kube: fakeKube({ patchDeploymentScale }),
+    });
+    cluster.pods.set(summary({ name: "orders" }));
+    const first = service.run(scaleRequest(), { kind: "user" });
+    // 같은 Deployment는 막고, 이름이 같은 Pod는 막지 않습니다.
+    expect(
+      (await service.run(scaleRequest(), { kind: "user" })).item.error,
+    ).toBe("action-in-progress");
+    expect(
+      (
+        await service.run(
+          request({ target: { namespace: "shop", name: "orders" } }),
+          { kind: "user" },
+        )
+      ).status,
+    ).toBe(200);
+    finish();
+    expect((await first).status).toBe(200);
   });
 });

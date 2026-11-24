@@ -1,4 +1,5 @@
-// 조치가 부르는 쿠버네티스 API입니다(docs/guides/T21.md 결정 8, 9, docs/guides/T23.md 결정 8). 조치를 더할 때(T24 scale) 여기에 메서드를 더합니다.
+// 조치가 부르는 쿠버네티스 API입니다(docs/guides/T21.md 결정 8, 9, docs/guides/T23.md 결정 8, docs/guides/T24.md 결정 7).
+// 조치를 더할 때 여기에 메서드를 더합니다.
 // 서버의 ServiceAccount(클러스터 안) 또는 GLASSPOD_KUBE_CONTEXT의 kubeconfig로 부릅니다. watch와 같은 연결입니다.
 import {
   AppsV1Api,
@@ -42,6 +43,18 @@ export interface KubeServiceObject {
   selector: Record<string, string> | undefined;
 }
 
+// Deployment의 scale 하위 자원입니다. uid는 Deployment의 uid입니다.
+export interface KubeScaleObject {
+  uid: string;
+  replicas: number;
+}
+
+// 스케일 조정의 merge patch 본문입니다(T24 결정 7). metadata.uid는 precondition이라 같은 이름의 새 Deployment면
+// 쿠버네티스가 409로 거부합니다. resourceVersion은 넣지 않습니다(Deployment status가 자주 바뀌어 헛된 충돌이 남).
+export function scalePatch(uid: string, replicas: number): object {
+  return { metadata: { uid }, spec: { replicas } };
+}
+
 export interface KubeActions {
   // Pod를 지웁니다. uid가 다르면(같은 이름의 다른 Pod) 쿠버네티스가 409로 거부합니다.
   deletePod(pod: PodRef, uid: string): Promise<void>;
@@ -53,6 +66,17 @@ export interface KubeActions {
   listServices(namespace: string): Promise<KubeServiceObject[]>;
   // merge patch입니다. 본문의 metadata.resourceVersion이 지금과 다르면 쿠버네티스가 409로 거부합니다.
   patchPod(pod: PodRef, body: object): Promise<void>;
+  readDeploymentScale(
+    namespace: string,
+    name: string,
+  ): Promise<KubeScaleObject>;
+  // replica 수를 바꿉니다(scalePatch). uid가 지금 Deployment와 다르면 쿠버네티스가 409로 거부합니다.
+  patchDeploymentScale(
+    namespace: string,
+    name: string,
+    uid: string,
+    replicas: number,
+  ): Promise<void>;
 }
 
 // 요청마다 시간 제한 신호를 넣는 미들웨어입니다. client-node의 기본 미들웨어(User-Agent) 뒤에 붙입니다.
@@ -151,6 +175,28 @@ export function createKubeActions(
       // client-node는 patch를 JSON Patch로 보내므로 Content-Type을 merge patch로 바꿉니다.
       await core.patchNamespacedPod(
         { namespace: pod.namespace, name: pod.name, body },
+        setHeaderOptions(
+          "Content-Type",
+          PatchStrategy.MergePatch,
+          timeoutOptions(timeoutMs),
+        ),
+      );
+    },
+
+    async readDeploymentScale(namespace, name) {
+      const scale = await apps.readNamespacedDeploymentScale(
+        { namespace, name },
+        timeoutOptions(timeoutMs),
+      );
+      return {
+        uid: scale.metadata?.uid ?? "",
+        replicas: scale.spec?.replicas ?? 0,
+      };
+    },
+
+    async patchDeploymentScale(namespace, name, uid, replicas) {
+      await apps.patchNamespacedDeploymentScale(
+        { namespace, name, body: scalePatch(uid, replicas) },
         setHeaderOptions(
           "Content-Type",
           PatchStrategy.MergePatch,

@@ -1,18 +1,26 @@
 // 오른쪽 자리, Pod를 고르기 전입니다: Deployment별 요약과 최근 30분 판단 변화(design.md 5.3, docs/guides/T18.md 결정 17, 18).
 // 타임라인에는 조치도 섞습니다(docs/guides/T21.md 결정 21).
+// Deployment 카드의 '스케일 조정'은 오른쪽 서랍을 엽니다(docs/guides/T24.md 결정 1, 12).
 import type {
   ActionItem,
+  PodRef,
   PodStatusChange,
   StatusChangesBody,
 } from "@glasspod/protocol";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
 import type { ApiResult } from "../api/client.js";
 import { getStatusChanges } from "../api/pods.js";
 import { useActionHistory } from "../api/useActionHistory.js";
-import { ResultBadge } from "../actions/ActionParts.js";
+import { ActionTargetLink, ResultBadge } from "../actions/ActionParts.js";
+import { ScaleDrawer } from "../actions/ScaleDrawer.js";
 import { podLink, useShell } from "../shell/shellContext.js";
-import { ChevronRightIcon, ClockIcon, HexagonIcon } from "../ui/icons.js";
+import {
+  ChevronRightIcon,
+  ClockIcon,
+  HexagonIcon,
+  ScaleIcon,
+} from "../ui/icons.js";
 import {
   IsolatedBadge,
   StatusBadge,
@@ -24,7 +32,10 @@ import {
   actionSentence,
   actionTone,
   actorLabel,
+  hpaNote,
+  hpaRange,
   isIsolation,
+  scaleBlockReason,
 } from "../view/actionText.js";
 import { changeSentence, formatClock, statusTone } from "../view/podText.js";
 import {
@@ -48,6 +59,10 @@ export function OverviewPage() {
     stream.opens,
     stream.state?.actions ?? [],
   );
+
+  // 스케일 서랍을 연 Deployment입니다.
+  const [scaling, setScaling] = useState<PodRef | undefined>(undefined);
+  const closeScale = useCallback(() => setScaling(undefined), []);
 
   const showNamespace =
     namespace === undefined &&
@@ -89,6 +104,8 @@ export function OverviewPage() {
               key={summary.key}
               summary={summary}
               showNamespace={showNamespace}
+              actionNamespaces={list.actionNamespaces}
+              onScale={setScaling}
             />
           ))}
         </div>
@@ -149,6 +166,20 @@ export function OverviewPage() {
           </p>
         )}
       </section>
+
+      {scaling !== undefined && (
+        <ScaleDrawer
+          key={JSON.stringify([scaling.namespace, scaling.name])}
+          target={scaling}
+          deployment={list?.deployments.find(
+            (item) =>
+              item.namespace === scaling.namespace &&
+              item.name === scaling.name,
+          )}
+          pods={list?.pods ?? []}
+          onClose={closeScale}
+        />
+      )}
     </div>
   );
 }
@@ -180,21 +211,54 @@ function useStatusTimeline(
 function DeploymentCard({
   summary,
   showNamespace,
+  actionNamespaces,
+  onScale,
 }: {
   summary: DeploymentSummary;
   showNamespace: boolean;
+  actionNamespaces: readonly string[];
+  onScale: (deployment: PodRef) => void;
 }) {
+  const kube = summary.kube;
+  const blocked =
+    kube === undefined ? undefined : scaleBlockReason(kube, actionNamespaces);
   return (
     <article className="rounded-xl border border-line bg-white px-5 py-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <h2 className="flex min-w-0 items-center gap-2 text-base font-semibold text-slate-900">
           <HexagonIcon className="size-4 shrink-0 text-glass-cyan" />
           <span className="break-all">{summary.name ?? "Deployment 없음"}</span>
         </h2>
-        {summary.kube !== undefined && (
-          <span className="text-xs whitespace-nowrap text-slate-500">
-            쿠버네티스 {summary.kube.ready}/{summary.kube.desired} Ready
-          </span>
+        {kube !== undefined && (
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <span className="text-xs whitespace-nowrap text-slate-500">
+              쿠버네티스 {kube.ready}/{kube.desired} Ready
+            </span>
+            {kube.hpa !== undefined && (
+              <span
+                title={hpaNote(kube.hpa)}
+                className="rounded-full bg-warning-wash px-2 py-0.5 text-xs font-semibold whitespace-nowrap text-warning-ink ring-1 ring-warning-line ring-inset"
+              >
+                {hpaRange(kube.hpa)}
+              </span>
+            )}
+            {/* 스케일 조정은 Deployment 카드에만 둡니다(T24 결정 1). HPA가 있으면 title에 경고를 씁니다. */}
+            <button
+              type="button"
+              disabled={blocked !== undefined}
+              title={
+                blocked ??
+                (kube.hpa === undefined ? undefined : hpaNote(kube.hpa))
+              }
+              onClick={() =>
+                onScale({ namespace: kube.namespace, name: kube.name })
+              }
+              className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-white px-2.5 py-1 text-[13px] font-medium whitespace-nowrap text-deep-teal hover:bg-mist disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <ScaleIcon className="size-4" />
+              스케일 조정
+            </button>
+          </div>
         )}
       </div>
       {showNamespace && (
@@ -307,13 +371,11 @@ function ActionTimelineRow({
       </div>
       <div className="pb-5 group-last:pb-0">
         <div className="flex flex-wrap items-center gap-2">
-          <Link
-            to={podLink(action.target, namespace)}
-            className="font-mono text-xs break-all text-deep-teal hover:underline"
-          >
-            {showNamespace ? `${action.target.namespace}/` : ""}
-            {action.target.name}
-          </Link>
+          <ActionTargetLink
+            item={action}
+            namespace={namespace}
+            showNamespace={showNamespace}
+          />
           <span className="text-[13px] font-semibold text-slate-800">
             {ACTION_LABEL[action.action]} · {actorLabel(action.actor)}
           </span>

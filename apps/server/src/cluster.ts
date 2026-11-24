@@ -5,6 +5,7 @@ import type {
   V1ObjectMeta,
   V1Pod,
   V1ReplicaSet,
+  V2HorizontalPodAutoscaler,
 } from "@kubernetes/client-node";
 import type { PodIsolation } from "@glasspod/protocol";
 import { readIsolation } from "./isolation.js";
@@ -51,6 +52,16 @@ export interface ReplicaSetSummary {
   desired: number;
 }
 
+// HPA 요약입니다(docs/guides/T24.md 결정 9). target은 scaleTargetRef가 Deployment일 때만 그 이름입니다.
+export interface HpaSummary {
+  namespace: string;
+  name: string;
+  uid: string;
+  target: string | undefined;
+  minReplicas: number;
+  maxReplicas: number;
+}
+
 // 바뀌었는지 비교하는 필드입니다. 이름·namespace·uid·createdAt은 같은 객체면 바뀌지 않습니다.
 const POD_FIELDS = [
   "phase",
@@ -73,6 +84,11 @@ const REPLICA_SET_FIELDS = [
   "revision",
   "desired",
 ] as const satisfies readonly (keyof ReplicaSetSummary)[];
+const HPA_FIELDS = [
+  "target",
+  "minReplicas",
+  "maxReplicas",
+] as const satisfies readonly (keyof HpaSummary)[];
 
 const REVISION_ANNOTATION = "deployment.kubernetes.io/revision";
 
@@ -183,6 +199,22 @@ export function summarizeReplicaSet(
   };
 }
 
+// HPA를 요약합니다. minReplicas가 없으면 쿠버네티스 기본값 1입니다.
+// scaleTargetRef가 apps 그룹의 Deployment가 아니면(StatefulSet 등) target이 없습니다.
+export function summarizeHpa(hpa: V2HorizontalPodAutoscaler): HpaSummary {
+  const ref = hpa.spec?.scaleTargetRef;
+  const group = ref?.apiVersion?.split("/")[0];
+  return {
+    ...identity(hpa.metadata),
+    target:
+      ref !== undefined && ref.kind === "Deployment" && group === "apps"
+        ? ref.name
+        : undefined,
+    minReplicas: hpa.spec?.minReplicas ?? 1,
+    maxReplicas: hpa.spec?.maxReplicas ?? 0,
+  };
+}
+
 // 두 요약에서 값이 다른 필드 이름입니다. 객체 값(lastTermination)은 내용으로 비교합니다.
 export function changedFields<T, K extends keyof T>(
   previous: T,
@@ -238,6 +270,7 @@ class SummaryMap<
 export type PodField = (typeof POD_FIELDS)[number];
 export type DeploymentField = (typeof DEPLOYMENT_FIELDS)[number];
 export type ReplicaSetField = (typeof REPLICA_SET_FIELDS)[number];
+export type HpaField = (typeof HPA_FIELDS)[number];
 
 // watch가 채우는 클러스터의 지금 상태입니다. T13 상태 판단과 T14 조회 API가 읽습니다.
 export class ClusterState {
@@ -248,6 +281,7 @@ export class ClusterState {
   readonly replicaSets = new SummaryMap<ReplicaSetSummary, ReplicaSetField>(
     REPLICA_SET_FIELDS,
   );
+  readonly hpas = new SummaryMap<HpaSummary, HpaField>(HPA_FIELDS);
 
   // Pod → ReplicaSet → Deployment. ReplicaSet을 아직 받지 못했거나 Deployment가 만든 것이 아니면 undefined입니다.
   deploymentOf(pod: PodSummary): string | undefined {
@@ -255,5 +289,13 @@ export class ClusterState {
       return undefined;
     }
     return this.replicaSets.get(pod.namespace, pod.replicaSet)?.deployment;
+  }
+
+  // 이 Deployment를 겨냥한 HPA 가운데 이름순 첫째입니다(T24 결정 9). 없으면 undefined입니다.
+  hpaOf(namespace: string, deployment: string): HpaSummary | undefined {
+    return this.hpas
+      .list()
+      .filter((hpa) => hpa.namespace === namespace && hpa.target === deployment)
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))[0];
   }
 }

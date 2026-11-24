@@ -1,7 +1,7 @@
 # 서버가 glasspod-demo namespace를 볼 수 있게 하는 권한입니다(docs/guides/T16.md).
 # 권한은 이 namespace에 한정된 Role로만 줍니다. ClusterRole은 쓰지 않습니다(design.md 9장).
 # 관찰 권한(watch에 쓰는 list, watch와 get)과 조치 권한입니다. 조치 권한은 그 조치를 만드는 작업에서 더합니다
-# (T21 pods delete, T23 pods patch·services get/list, T24 deployments/scale). 서버가 조치하는 namespace는 server.yaml의
+# (T21 pods delete, T23 pods patch·services get/list, T24 deployments/scale get/patch·HPA get/list/watch). 서버가 조치하는 namespace는 server.yaml의
 # GLASSPOD_ACTION_NAMESPACES로도 한 번 더 막습니다(docs/guides/T21.md 결정 2, 13).
 #
 # Role과 RoleBinding은 glasspod-demo에 만들어지므로 deploy/demo/를 먼저 apply해야 합니다.
@@ -30,6 +30,14 @@ rules:
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list"]
+  # 스케일 조정입니다. Deployment 본체가 아니라 scale 하위 자원만 읽고 바꿉니다(docs/guides/T24.md 결정 7, 11).
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["get", "patch"]
+  # 스케일 조정의 HPA 경고에 쓰는 watch입니다(docs/guides/T24.md 결정 9, 11). 읽기만 합니다.
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

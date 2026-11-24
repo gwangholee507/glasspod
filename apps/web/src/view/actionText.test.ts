@@ -1,4 +1,4 @@
-import type { ActionItem, PodItem } from "@glasspod/protocol";
+import type { ActionItem, DeploymentItem, PodItem } from "@glasspod/protocol";
 import { describe, expect, it } from "vitest";
 import {
   NO_ACTION_FILTER,
@@ -8,9 +8,14 @@ import {
   formatActionTime,
   mergeActions,
   actionBlockReason,
+  hpaRange,
+  isActionOn,
+  isReplicaCount,
   isolateSteps,
   isolatedPods,
   restartImpact,
+  scaleBlockReason,
+  scalePlan,
   shortPodName,
 } from "./actionText.js";
 
@@ -356,5 +361,151 @@ describe("shortPodName", () => {
   it("takes the last part", () => {
     expect(shortPodName("demo-app-7c9f8b6d5-9kd2p")).toBe("9kd2p");
     expect(shortPodName("debug")).toBe("debug");
+  });
+});
+
+describe("scale-deployment", () => {
+  const deployment: DeploymentItem = {
+    namespace: "shop",
+    name: "orders",
+    uid: "dep",
+    desired: 3,
+    ready: 3,
+    available: 3,
+  };
+  const hpa = { name: "orders-hpa", minReplicas: 3, maxReplicas: 5 };
+  const scaled = action({
+    action: "scale-deployment",
+    target: {
+      kind: "deployment",
+      namespace: "shop",
+      name: "orders",
+      uid: "dep",
+    },
+    scale: { from: 3, to: 5 },
+  });
+
+  it("describes the result with the hpa and deployment failures", () => {
+    expect(actionSentence(scaled)).toBe(
+      "Deployment orders의 replica 수를 3개에서 5개로 바꿨습니다.",
+    );
+    expect(
+      actionSentence({
+        ...scaled,
+        scale: { from: 5, to: 2, hpa: "orders-hpa" },
+      }),
+    ).toBe(
+      "Deployment orders의 replica 수를 5개에서 2개로 바꿨습니다. HPA가 다시 바꿀 수 있습니다(orders-hpa).",
+    );
+    expect(
+      actionSentence({
+        ...scaled,
+        result: "failed",
+        error: "target-not-found",
+        kubeStatus: 404,
+        scale: { to: 5 },
+      }),
+    ).toBe("HTTP 404 · Deployment가 이미 지워져 있습니다.");
+    expect(errorSentence("target-changed", "deployment")).toBe(
+      "같은 이름의 다른 Deployment로 바뀌었습니다. 목록을 다시 보고 실행합니다.",
+    );
+  });
+
+  it("keeps deployment actions out of a pod with the same name", () => {
+    const pod = { namespace: "shop", name: "orders" };
+    expect(isActionOn(scaled, pod)).toBe(false);
+    expect(
+      isActionOn(action({ target: { kind: "pod", ...pod, uid: "u" } }), pod),
+    ).toBe(true);
+  });
+
+  it("accepts whole counts from 0 to 20", () => {
+    expect([0, 20].map(isReplicaCount)).toEqual([true, true]);
+    expect([-1, 21, 2.5, Number.NaN].map(isReplicaCount)).toEqual([
+      false,
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  it("turns the button off while loading or when actions are off", () => {
+    expect(scaleBlockReason(deployment, ["shop"])).toBeUndefined();
+    expect(scaleBlockReason(deployment, undefined)).toBe(
+      "서버에서 목록을 받는 중입니다.",
+    );
+    expect(scaleBlockReason(deployment, [])).toBe(
+      "서버에서 조치가 꺼져 있습니다(GLASSPOD_ACTION_NAMESPACES).",
+    );
+    expect(hpaRange(hpa)).toBe("HPA 3~5");
+  });
+
+  it("plans scaling up with the current pods and leaves isolated pods out", () => {
+    const pods = [
+      pod("orders-b"),
+      pod("orders-a"),
+      pod("orders-gone", {
+        kube: { ...pod("x").kube!, terminating: true },
+      }),
+      pod("orders-old", {
+        deployment: undefined,
+        kube: {
+          ...pod("x").kube!,
+          isolation: { labels: { app: "orders" }, deployment: "orders" },
+        },
+      }),
+      pod("payments-1", { deployment: "payments" }),
+    ];
+    const plan = scalePlan(deployment, pods, 5);
+    expect(plan.pods.map((row) => row.pod.name)).toEqual([
+      "orders-a",
+      "orders-b",
+    ]);
+    expect(plan).toMatchObject({ from: 3, to: 5, added: 2, removed: 0 });
+    expect(plan.steps).toEqual([
+      "Deployment orders의 replica 수를 3개에서 5개로 바꿉니다.",
+      "ReplicaSet이 새 Pod 2개를 만듭니다. 준비되면 트래픽을 받습니다.",
+      "격리된 Pod 1개는 Deployment가 관리하지 않아 이 수에 들지 않고 그대로 남습니다.",
+    ]);
+    expect(plan.warnings).toEqual([]);
+    expect(plan.notice).toBe(
+      "새 Pod는 readiness probe를 통과한 뒤에 트래픽을 받습니다.",
+    );
+  });
+
+  it("plans scaling down, to zero, and to the same count", () => {
+    const down = scalePlan(deployment, [], 1);
+    expect(down).toMatchObject({ added: 0, removed: 2 });
+    expect(down.steps).toEqual([
+      "Deployment orders의 replica 수를 3개에서 1개로 바꿉니다.",
+      "ReplicaSet이 Pod 2개를 지웁니다. 준비 안 된 Pod와 늦게 만든 Pod를 먼저 고릅니다.",
+      "지운 Pod의 기록은 이 화면에 30분 남습니다.",
+    ]);
+
+    const zero = scalePlan(deployment, [], 0);
+    expect(zero.steps[1]).toBe("ReplicaSet이 Pod 3개를 모두 지웁니다.");
+    expect(zero.warnings).toEqual([
+      "replica를 0개로 하면 이 Deployment의 Pod가 모두 지워져 트래픽을 받을 Pod가 없습니다.",
+    ]);
+
+    const same = scalePlan(deployment, [], 3);
+    expect(same.steps).toEqual(["바꿀 replica 수를 고릅니다."]);
+    expect(same.notice).toBe("replica 수는 0~20개로 고릅니다.");
+  });
+
+  it("warns about the hpa and when the count is outside its range", () => {
+    const withHpa = { ...deployment, hpa };
+    const note =
+      "HPA orders-hpa(최소 3 · 최대 5)가 이 Deployment의 replica 수를 관리합니다. 바꾼 값은 HPA가 다시 바꿀 수 있습니다.";
+    expect(scalePlan(withHpa, [], 4).warnings).toEqual([note]);
+    expect(scalePlan(withHpa, [], 2).warnings).toEqual([
+      `${note} 2개는 범위 밖이라 HPA가 곧 3개로 되돌립니다.`,
+    ]);
+    expect(scalePlan(withHpa, [], 7).warnings).toEqual([
+      `${note} 7개는 범위 밖이라 HPA가 곧 5개로 되돌립니다.`,
+    ]);
+    expect(scalePlan(withHpa, [], 0).warnings[0]).toBe(
+      `${note} 0개면 HPA가 이 Deployment를 조정하지 않습니다.`,
+    );
   });
 });

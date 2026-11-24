@@ -62,7 +62,7 @@ export function DeleteDrawer({
     <ActionDrawer
       title="Pod 삭제"
       icon={<TrashIcon className="size-4" />}
-      pod={pod}
+      targetName={pod.name}
       status={current?.status}
       isolated
       facts={[

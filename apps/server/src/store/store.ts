@@ -112,7 +112,7 @@ export type ActionRecord = ActionItem;
 // 조치 기록을 거르는 조건입니다. 둘 다 주면 둘 다 맞는 것만입니다.
 export interface ActionQuery {
   namespace?: string;
-  // 대상 Pod(namespace·이름)입니다.
+  // 대상 Pod(namespace·이름)입니다. 주면 Pod가 대상인 조치만 돌려줍니다(T24).
   pod?: PodRef;
 }
 

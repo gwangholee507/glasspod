@@ -133,8 +133,10 @@ export class MemoryStore implements Store {
       .filter(
         (record) =>
           (namespace === undefined || record.target.namespace === namespace) &&
+          // Pod를 주면 그 Pod가 대상인 조치만입니다. 스케일 조정(Deployment 대상)은 뺍니다(docs/guides/T24.md 결정 14).
           (pod === undefined ||
-            (record.target.namespace === pod.namespace &&
+            (record.target.kind === "pod" &&
+              record.target.namespace === pod.namespace &&
               record.target.name === pod.name)),
       )
       .sort((a, b) => a.requestedAt - b.requestedAt);

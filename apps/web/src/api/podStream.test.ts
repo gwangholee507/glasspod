@@ -38,7 +38,14 @@ const STATE: PodStreamState = {
     namespaces: ["shop"],
     actionNamespaces: ["shop"],
     deployments: [
-      { namespace: "shop", name: "orders", desired: 2, ready: 2, available: 2 },
+      {
+        namespace: "shop",
+        name: "orders",
+        uid: "d",
+        desired: 2,
+        ready: 2,
+        available: 2,
+      },
     ],
     pods: [pod("orders-1"), pod("orders-3")],
   },
@@ -100,6 +107,7 @@ describe("applyPodChanges", () => {
           {
             namespace: "shop",
             name: "orders",
+            uid: "d",
             desired: 3,
             ready: 2,
             available: 2,

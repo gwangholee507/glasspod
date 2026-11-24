@@ -1,10 +1,14 @@
-// 조치를 화면 글로 바꾸고, 기록을 합치고 거르고, 재시작·트래픽에서 빼기의 영향을 계산하는 순수 함수입니다
-// (docs/guides/T21.md, docs/guides/T23.md). 서버의 기록은 코드(error, kubeStatus)이므로 문장은 여기서 만듭니다(T21 결정 22, '결과 문장').
+// 조치를 화면 글로 바꾸고, 기록을 합치고 거르고, 재시작·트래픽에서 빼기·스케일 조정의 영향을 계산하는 순수 함수입니다
+// (docs/guides/T21.md, docs/guides/T23.md, docs/guides/T24.md). 서버의 기록은 코드(error, kubeStatus)이므로
+// 문장은 여기서 만듭니다(T21 결정 22, '결과 문장').
 import type {
   ActionActor,
   ActionItem,
   ActionKind,
   ActionResult,
+  ActionTarget,
+  DeploymentHpa,
+  DeploymentItem,
   IsolationPlan,
   PodItem,
   PodRef,
@@ -19,6 +23,7 @@ export const ACTION_LABEL: Record<ActionKind, string> = {
   "restart-pod": "Pod 재시작",
   "isolate-pod": "트래픽에서 빼기",
   "delete-pod": "Pod 삭제",
+  "scale-deployment": "스케일 조정",
 };
 
 // 조치 기록 화면의 '조치' 거르기 순서입니다.
@@ -26,7 +31,19 @@ export const ACTION_KINDS: readonly ActionKind[] = [
   "restart-pod",
   "isolate-pod",
   "delete-pod",
+  "scale-deployment",
 ];
+
+// Pod가 대상인 조치입니다. 상세 머리줄의 버튼입니다(스케일 조정은 Deployment 카드, docs/guides/T24.md 결정 1).
+export type PodActionKind = Exclude<ActionKind, "scale-deployment">;
+
+export const POD_ACTION_KINDS: readonly PodActionKind[] = [
+  "restart-pod",
+  "isolate-pod",
+  "delete-pod",
+];
+
+type TargetKind = ActionTarget["kind"];
 
 export const RESULT_LABEL: Record<ActionResult, string> = {
   succeeded: "성공",
@@ -59,8 +76,19 @@ const ERROR_SENTENCE: Record<string, string> = {
     "쿠버네티스가 10초 안에 답하지 않았습니다. 실행됐는지 목록에서 확인합니다.",
 };
 
-export function errorSentence(code: string): string {
-  return ERROR_SENTENCE[code] ?? `조치를 보내지 못했습니다(${code}).`;
+// 대상이 Deployment(스케일 조정)일 때 문장이 다른 오류 코드입니다(T24 '결과 문장').
+const DEPLOYMENT_ERROR_SENTENCE: Record<string, string> = {
+  "target-not-found": "Deployment가 이미 지워져 있습니다.",
+  "target-changed":
+    "같은 이름의 다른 Deployment로 바뀌었습니다. 목록을 다시 보고 실행합니다.",
+};
+
+export function errorSentence(code: string, kind: TargetKind = "pod"): string {
+  return (
+    (kind === "deployment" ? DEPLOYMENT_ERROR_SENTENCE[code] : undefined) ??
+    ERROR_SENTENCE[code] ??
+    `조치를 보내지 못했습니다(${code}).`
+  );
 }
 
 // 서버에 닿지 못했거나 알 수 없는 답이면 조치가 실행됐는지 모릅니다.
@@ -93,6 +121,19 @@ function successSentence(item: ActionItem): string {
     }
     case "delete-pod":
       return "격리된 Pod를 지웠습니다.";
+    case "scale-deployment": {
+      const scale = item.scale;
+      const subject = `Deployment ${item.target.name}의 replica 수를`;
+      const changed =
+        scale === undefined
+          ? `${subject} 바꿨습니다.`
+          : scale.from === undefined
+            ? `${subject} ${scale.to}개로 바꿨습니다.`
+            : `${subject} ${scale.from}개에서 ${scale.to}개로 바꿨습니다.`;
+      return scale?.hpa === undefined
+        ? changed
+        : `${changed} HPA가 다시 바꿀 수 있습니다(${scale.hpa}).`;
+    }
   }
 }
 
@@ -101,7 +142,7 @@ export function actionSentence(item: ActionItem): string {
   if (item.result === "succeeded") {
     return successSentence(item);
   }
-  const sentence = errorSentence(item.error ?? "kube-error");
+  const sentence = errorSentence(item.error ?? "kube-error", item.target.kind);
   return item.kubeStatus === undefined
     ? sentence
     : `HTTP ${item.kubeStatus} · ${sentence}`;
@@ -134,9 +175,12 @@ export function mergeActions(
   );
 }
 
+// 이 Pod가 대상인 조치입니다. 이름이 같은 Deployment의 스케일 조정은 넣지 않습니다(T24 결정 14).
 export function isActionOn(item: ActionItem, pod: PodRef): boolean {
   return (
-    item.target.namespace === pod.namespace && item.target.name === pod.name
+    item.target.kind === "pod" &&
+    item.target.namespace === pod.namespace &&
+    item.target.name === pod.name
   );
 }
 
@@ -190,7 +234,7 @@ export function formatActionTime(at: number, now: number): string {
 // actionNamespaces가 undefined면 아직 목록을 받지 못한 것입니다.
 // 서버와 같이 삭제는 격리된 Pod만, 재시작·트래픽에서 빼기는 격리되지 않은 Pod만 받습니다.
 export function actionBlockReason(
-  action: ActionKind,
+  action: PodActionKind,
   pod: PodRef,
   item: PodItem | undefined,
   actionNamespaces: readonly string[] | undefined,
@@ -215,10 +259,9 @@ function commonBlockReason(
   if (actionNamespaces === undefined || item === undefined) {
     return "서버에서 Pod 정보를 받는 중입니다.";
   }
-  if (!actionNamespaces.includes(pod.namespace)) {
-    return actionNamespaces.length === 0
-      ? "서버에서 조치가 꺼져 있습니다(GLASSPOD_ACTION_NAMESPACES)."
-      : "이 namespace는 조치가 꺼져 있습니다(GLASSPOD_ACTION_NAMESPACES).";
+  const off = namespaceBlockReason(pod.namespace, actionNamespaces);
+  if (off !== undefined) {
+    return off;
   }
   if (item.kube === undefined) {
     return "쿠버네티스에 없는 Pod입니다.";
@@ -227,6 +270,29 @@ function commonBlockReason(
     return "Pod가 지워지는 중입니다.";
   }
   return undefined;
+}
+
+function namespaceBlockReason(
+  namespace: string,
+  actionNamespaces: readonly string[],
+): string | undefined {
+  if (actionNamespaces.includes(namespace)) {
+    return undefined;
+  }
+  return actionNamespaces.length === 0
+    ? "서버에서 조치가 꺼져 있습니다(GLASSPOD_ACTION_NAMESPACES)."
+    : "이 namespace는 조치가 꺼져 있습니다(GLASSPOD_ACTION_NAMESPACES).";
+}
+
+// Deployment 카드의 '스케일 조정'을 끌 이유입니다(T24 결정 12). 카드는 쿠버네티스에 있는 Deployment에만 버튼을 둡니다.
+export function scaleBlockReason(
+  deployment: DeploymentItem,
+  actionNamespaces: readonly string[] | undefined,
+): string | undefined {
+  if (actionNamespaces === undefined) {
+    return "서버에서 목록을 받는 중입니다.";
+  }
+  return namespaceBlockReason(deployment.namespace, actionNamespaces);
 }
 
 export interface ImpactRow {
@@ -260,7 +326,7 @@ function isServing(item: PodItem): boolean {
   return item.kube?.ready === true && item.severity !== "critical";
 }
 
-function impactRow(item: PodItem): ImpactRow {
+export function impactRow(item: PodItem): ImpactRow {
   if (item.kube?.ready !== true) {
     return {
       pod: item.pod,
@@ -402,4 +468,127 @@ export function isolatedPods(pods: readonly PodItem[]): PodItem[] {
           (a.kube?.isolation?.at ?? -Infinity) ||
         (a.pod.name < b.pod.name ? -1 : a.pod.name > b.pod.name ? 1 : 0),
     );
+}
+
+// ── 스케일 조정(docs/guides/T24.md 결정 2, 3, 13) ──
+
+// 고를 수 있는 replica 수의 상한입니다. 서버(apps/server/src/actions.ts의 MAX_SCALE_REPLICAS)와 같은 값입니다.
+export const MAX_SCALE_REPLICAS = 20;
+
+export function isReplicaCount(value: number): boolean {
+  return Number.isInteger(value) && value >= 0 && value <= MAX_SCALE_REPLICAS;
+}
+
+// 카드 칩의 글입니다(예: HPA 3~5).
+export function hpaRange(hpa: DeploymentHpa): string {
+  return `HPA ${hpa.minReplicas}~${hpa.maxReplicas}`;
+}
+
+// HPA 경고의 앞 문장입니다. 카드 버튼 title과 서랍 경고가 함께 씁니다.
+export function hpaNote(hpa: DeploymentHpa): string {
+  return `HPA ${hpa.name}(최소 ${hpa.minReplicas} · 최대 ${hpa.maxReplicas})가 이 Deployment의 replica 수를 관리합니다. 바꾼 값은 HPA가 다시 바꿀 수 있습니다.`;
+}
+
+export interface ScalePlan {
+  // 지금 replica 수(Deployment spec)와 고른 수입니다.
+  from: number;
+  to: number;
+  steps: string[];
+  warnings: string[];
+  notice: string;
+  // 지금 이 Deployment의 Pod입니다. 격리된 Pod와 지워지는 중인 Pod는 뺍니다. 이름순입니다.
+  pods: ImpactRow[];
+  // 늘리면 새로 만들 Pod 수, 줄이면 지울 Pod 수입니다. 같으면 둘 다 0입니다.
+  added: number;
+  removed: number;
+}
+
+// 스케일 서랍의 '실행하면'·영향·경고·안내입니다. 화면이 받은 목록(스트림)으로 계산합니다(T24 '서랍 문장').
+export function scalePlan(
+  deployment: DeploymentItem,
+  pods: readonly PodItem[],
+  to: number,
+): ScalePlan {
+  const from = deployment.desired;
+  const inNamespace = pods.filter(
+    (item) => item.pod.namespace === deployment.namespace,
+  );
+  const members = inNamespace
+    .filter(
+      (item) =>
+        item.deployment === deployment.name &&
+        item.kube !== undefined &&
+        !item.kube.terminating &&
+        item.kube.isolation === undefined,
+    )
+    .sort((a, b) => (a.pod.name < b.pod.name ? -1 : 1));
+  // 이 Deployment에서 트래픽에서 뺀 Pod입니다. Deployment가 놓아주어 replica 수에 들지 않습니다.
+  const isolated = inNamespace.filter(
+    (item) => item.kube?.isolation?.deployment === deployment.name,
+  ).length;
+  const added = Math.max(to - from, 0);
+  const removed = Math.max(from - to, 0);
+
+  const steps: string[] = [];
+  if (to === from) {
+    steps.push("바꿀 replica 수를 고릅니다.");
+  } else {
+    steps.push(
+      `Deployment ${deployment.name}의 replica 수를 ${from}개에서 ${to}개로 바꿉니다.`,
+    );
+    if (added > 0) {
+      steps.push(
+        `ReplicaSet이 새 Pod ${added}개를 만듭니다. 준비되면 트래픽을 받습니다.`,
+      );
+    } else {
+      steps.push(
+        to === 0
+          ? `ReplicaSet이 Pod ${from}개를 모두 지웁니다.`
+          : `ReplicaSet이 Pod ${removed}개를 지웁니다. 준비 안 된 Pod와 늦게 만든 Pod를 먼저 고릅니다.`,
+        "지운 Pod의 기록은 이 화면에 30분 남습니다.",
+      );
+    }
+    if (isolated > 0) {
+      steps.push(
+        `격리된 Pod ${isolated}개는 Deployment가 관리하지 않아 이 수에 들지 않고 그대로 남습니다.`,
+      );
+    }
+  }
+
+  const warnings: string[] = [];
+  const hpa = deployment.hpa;
+  if (hpa !== undefined) {
+    let tail = "";
+    if (to === 0) {
+      tail = " 0개면 HPA가 이 Deployment를 조정하지 않습니다.";
+    } else if (to < hpa.minReplicas) {
+      tail = ` ${to}개는 범위 밖이라 HPA가 곧 ${hpa.minReplicas}개로 되돌립니다.`;
+    } else if (to > hpa.maxReplicas) {
+      tail = ` ${to}개는 범위 밖이라 HPA가 곧 ${hpa.maxReplicas}개로 되돌립니다.`;
+    }
+    warnings.push(`${hpaNote(hpa)}${tail}`);
+  }
+  if (to === 0 && from > 0) {
+    warnings.push(
+      "replica를 0개로 하면 이 Deployment의 Pod가 모두 지워져 트래픽을 받을 Pod가 없습니다.",
+    );
+  }
+
+  const notice =
+    to === from
+      ? `replica 수는 0~${MAX_SCALE_REPLICAS}개로 고릅니다.`
+      : added > 0
+        ? "새 Pod는 readiness probe를 통과한 뒤에 트래픽을 받습니다."
+        : "Pod를 지우면 메모리 상태와 처리 중이던 요청이 사라집니다. 원인을 조사하려면 먼저 snapshot을 받아 둡니다.";
+
+  return {
+    from,
+    to,
+    steps,
+    warnings,
+    notice,
+    pods: members.map(impactRow),
+    added,
+    removed,
+  };
 }

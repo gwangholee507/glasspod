@@ -1,7 +1,8 @@
 // 조치의 공통 길입니다(docs/guides/T21.md). 요청 검사 → namespace 제한 → 대상 확인 → 쿠버네티스 호출 → 기록.
 // 형식이 맞는 요청은 결과와 상관없이 저장소에 남기고, 다음 판단 주기의 SSE로 화면에 알립니다(결정 6, 12).
-// 조치를 더할 때(T24)는 ACTION_KINDS와 execute의 분기, kube-actions.ts의 호출을 더합니다.
-// 트래픽에서 빼기(isolate-pod)와 격리된 Pod 삭제(delete-pod)는 docs/guides/T23.md입니다.
+// 조치를 더할 때는 ACTION_KINDS·TARGET_KIND와 execute의 분기, kube-actions.ts의 호출을 더합니다.
+// 트래픽에서 빼기(isolate-pod)와 격리된 Pod 삭제(delete-pod)는 docs/guides/T23.md,
+// Deployment가 대상인 스케일 조정(scale-deployment)은 docs/guides/T24.md입니다.
 import { randomUUID } from "node:crypto";
 import { ApiException } from "@kubernetes/client-node";
 import type {
@@ -10,11 +11,13 @@ import type {
   ActionItem,
   ActionKind,
   ActionRequest,
+  ActionScale,
+  ActionTarget,
   IsolationPlan,
   PodRef,
   PodStatus,
 } from "@glasspod/protocol";
-import type { ClusterState, PodSummary } from "./cluster.js";
+import type { ClusterState, DeploymentSummary, PodSummary } from "./cluster.js";
 import { isNamespaceName } from "./config.js";
 import { isolationPatch, planIsolation } from "./isolation.js";
 import { describeError } from "./kube.js";
@@ -28,7 +31,19 @@ export const ACTION_KINDS = [
   "restart-pod",
   "isolate-pod",
   "delete-pod",
+  "scale-deployment",
 ] as const satisfies readonly ActionKind[];
+
+// 조치마다 대상 종류입니다(T24 결정 5).
+const TARGET_KIND: Record<ActionKind, ActionTarget["kind"]> = {
+  "restart-pod": "pod",
+  "isolate-pod": "pod",
+  "delete-pod": "pod",
+  "scale-deployment": "deployment",
+};
+
+// 스케일 조정에서 고를 수 있는 replica 수의 상한입니다(T24 결정 2). 웹(apps/web/src/view/actionText.ts)과 같은 값입니다.
+export const MAX_SCALE_REPLICAS = 20;
 
 // 쿠버네티스 객체 이름 규칙(DNS-1123 subdomain)입니다. Pod 이름은 이것을 따릅니다.
 const OBJECT_NAME_PATTERN = /^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/;
@@ -55,12 +70,22 @@ function isObjectName(value: string): boolean {
   );
 }
 
+function isReplicaCount(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= MAX_SCALE_REPLICAS
+  );
+}
+
 // POST /api/actions 본문을 검사합니다(결정 5). 모르는 필드는 무시합니다.
+// replicas는 스케일 조정만 받고(0~20 정수, T24 결정 2) 다른 조치에서는 무시합니다.
 export function parseActionRequest(body: unknown): ActionRequestParse {
   if (!isRecord(body)) {
     return { ok: false, detail: "body must be a JSON object" };
   }
-  const { action, target, expectedUid } = body;
+  const { action, target, expectedUid, replicas } = body;
   if (!isActionKind(action)) {
     return {
       ok: false,
@@ -74,15 +99,28 @@ export function parseActionRequest(body: unknown): ActionRequestParse {
   if (typeof namespace !== "string" || !isNamespaceName(namespace)) {
     return { ok: false, detail: "target.namespace must be a namespace name" };
   }
+  const kind = TARGET_KIND[action];
   if (typeof name !== "string" || !isObjectName(name)) {
-    return { ok: false, detail: "target.name must be a pod name" };
+    return { ok: false, detail: `target.name must be a ${kind} name` };
   }
   if (
     typeof expectedUid !== "string" ||
     expectedUid === "" ||
     expectedUid.length > MAX_UID_LENGTH
   ) {
-    return { ok: false, detail: "expectedUid must be the pod uid" };
+    return { ok: false, detail: `expectedUid must be the ${kind} uid` };
+  }
+  if (action === "scale-deployment") {
+    if (!isReplicaCount(replicas)) {
+      return {
+        ok: false,
+        detail: `replicas must be an integer from 0 to ${MAX_SCALE_REPLICAS}`,
+      };
+    }
+    return {
+      ok: true,
+      request: { action, target: { namespace, name }, expectedUid, replicas },
+    };
   }
   return {
     ok: true,
@@ -189,6 +227,11 @@ interface FreshPlan {
 // execute가 기록에 더하는 것입니다.
 type ExecuteResult = Pick<ActionItem, "isolation">;
 
+// 실행 중에 알게 된 것입니다. 실패해도 기록에 남깁니다(스케일의 from, T24 결정 8).
+interface RunContext {
+  scale?: ActionScale;
+}
+
 export interface ActionServiceOptions {
   // GLASSPOD_ACTION_NAMESPACES입니다(결정 2).
   actionNamespaces: readonly string[];
@@ -234,22 +277,42 @@ export class ActionService {
     actor: ActionActor,
   ): Promise<ActionOutcome> {
     const requestedAt = this.now();
-    const pod: PodRef = request.target;
-    const summary = this.options.cluster.pods.get(pod.namespace, pod.name);
-    let failure = this.check(request, summary);
+    const kind = TARGET_KIND[request.action];
+    const { namespace, name } = request.target;
+    const podSummary =
+      kind === "pod"
+        ? this.options.cluster.pods.get(namespace, name)
+        : undefined;
+    const context: RunContext = {};
+    if (request.action === "scale-deployment") {
+      // 실행할 때 붙어 있던 HPA를 기록에 남깁니다(T24 결정 8).
+      const hpa = this.options.cluster.hpaOf(namespace, name);
+      context.scale = {
+        to: request.replicas ?? 0,
+        ...(hpa === undefined ? {} : { hpa: hpa.name }),
+      };
+    }
+    let failure =
+      kind === "pod"
+        ? this.check(request, podSummary)
+        : this.checkDeployment(
+            request,
+            this.options.cluster.deployments.get(namespace, name),
+          );
     let result: ExecuteResult = {};
     if (failure === undefined) {
-      const key = podKey(pod);
+      // Pod와 Deployment가 같은 이름이어도 겹치지 않게 종류를 붙입니다.
+      const key = `${kind}:${podKey(request.target)}`;
       if (this.running.has(key)) {
         failure = {
           status: 409,
           error: "action-in-progress",
-          detail: `another action is running on pod ${podLabel(pod)}`,
+          detail: `another action is running on ${kind} ${podLabel(request.target)}`,
         };
       } else {
         this.running.add(key);
         try {
-          result = await this.execute(request, actor);
+          result = await this.execute(request, actor, context);
         } catch (error) {
           failure = failureOf(error);
         } finally {
@@ -259,16 +322,16 @@ export class ActionService {
     }
 
     const deployment =
-      summary === undefined
+      podSummary === undefined
         ? undefined
-        : this.options.cluster.deploymentOf(summary);
+        : this.options.cluster.deploymentOf(podSummary);
     const item: ActionItem = {
       id: this.newId(),
       action: request.action,
       target: {
-        kind: "pod",
-        namespace: pod.namespace,
-        name: pod.name,
+        kind,
+        namespace,
+        name,
         uid: request.expectedUid,
       },
       actor,
@@ -284,23 +347,20 @@ export class ActionService {
               ? {}
               : { kubeStatus: failure.kubeStatus }),
           }),
-      ...(summary?.replicaSet === undefined
+      ...(podSummary?.replicaSet === undefined
         ? {}
-        : { replicaSet: summary.replicaSet }),
+        : { replicaSet: podSummary.replicaSet }),
       ...(deployment === undefined ? {} : { deployment }),
       ...(failure === undefined ? result : {}),
+      ...(context.scale === undefined ? {} : { scale: context.scale }),
     };
 
     await this.record(item);
     return { status: failure?.status ?? 200, item };
   }
 
-  // 쿠버네티스를 부르기 전의 검사입니다(결정 6 ①~⑤). 통과하면 undefined입니다.
-  private check(
-    request: ActionRequest,
-    summary: PodSummary | undefined,
-  ): Failure | undefined {
-    const { namespace, name } = request.target;
+  // namespace 제한과 쿠버네티스 연결입니다(결정 6 ①②). 모든 조치가 먼저 지납니다.
+  private checkAccess(namespace: string): Failure | undefined {
     const allowed = this.options.actionNamespaces;
     if (!allowed.includes(namespace)) {
       return {
@@ -318,6 +378,19 @@ export class ActionService {
         error: "kube-unavailable",
         detail: "the server is not connected to kubernetes",
       };
+    }
+    return undefined;
+  }
+
+  // Pod 조치를 쿠버네티스에 보내기 전의 검사입니다(결정 6 ①~⑤). 통과하면 undefined입니다.
+  private check(
+    request: ActionRequest,
+    summary: PodSummary | undefined,
+  ): Failure | undefined {
+    const { namespace, name } = request.target;
+    const access = this.checkAccess(namespace);
+    if (access !== undefined) {
+      return access;
     }
     if (summary === undefined) {
       return {
@@ -355,9 +428,37 @@ export class ActionService {
     return undefined;
   }
 
+  // Deployment 조치(스케일 조정)의 검사입니다(T24 결정 6: ①~④, 지워지는 중·격리 검사는 없음).
+  private checkDeployment(
+    request: ActionRequest,
+    summary: DeploymentSummary | undefined,
+  ): Failure | undefined {
+    const { namespace, name } = request.target;
+    const access = this.checkAccess(namespace);
+    if (access !== undefined) {
+      return access;
+    }
+    if (summary === undefined) {
+      return {
+        status: 404,
+        error: "target-not-found",
+        detail: `no deployment ${namespace}/${name} in the cluster`,
+      };
+    }
+    if (summary.uid !== request.expectedUid) {
+      return {
+        status: 409,
+        error: "target-changed",
+        detail: `deployment uid is ${summary.uid}, not ${request.expectedUid}`,
+      };
+    }
+    return undefined;
+  }
+
   private async execute(
     request: ActionRequest,
     actor: ActionActor,
+    context: RunContext,
   ): Promise<ExecuteResult> {
     const kube = this.options.kube;
     if (kube === undefined) {
@@ -390,6 +491,27 @@ export class ActionService {
             services: fresh.plan.services,
           },
         };
+      }
+      case "scale-deployment": {
+        // 지금 replica 수를 읽어 기록의 from에 남기고, uid precondition을 넣어 바꿉니다(T24 결정 7).
+        const { namespace, name } = request.target;
+        const scale = await kube.readDeploymentScale(namespace, name);
+        if (scale.uid !== request.expectedUid) {
+          throw new ActionFailure({
+            status: 409,
+            error: "target-changed",
+            detail: `deployment uid is ${scale.uid}, not ${request.expectedUid}`,
+          });
+        }
+        const to = request.replicas ?? 0;
+        context.scale = { ...context.scale, from: scale.replicas, to };
+        await kube.patchDeploymentScale(
+          namespace,
+          name,
+          request.expectedUid,
+          to,
+        );
+        return {};
       }
     }
   }
@@ -524,6 +646,12 @@ export class ActionService {
           : Object.entries(item.isolation.labels)
               .map(([key, value]) => `${key}=${value}`)
               .join(","),
+      // 스케일 조정입니다(T24 결정 16). 읽기 전에 실패하면 from이 없어 '->5'입니다.
+      replicas:
+        item.scale === undefined
+          ? undefined
+          : `${item.scale.from ?? ""}->${item.scale.to}`,
+      hpa: item.scale?.hpa,
       detail: item.detail,
     };
     if (item.result === "succeeded") {

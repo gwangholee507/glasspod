@@ -20,7 +20,7 @@ import type {
   PodSdk,
   PodStatusChange,
 } from "@glasspod/protocol";
-import type { DeploymentSummary, PodSummary } from "./cluster.js";
+import type { DeploymentSummary, HpaSummary, PodSummary } from "./cluster.js";
 import { isNamespaceName } from "./config.js";
 import type { AppState } from "./pods.js";
 import { INCREASE_WINDOW_MS } from "./pods.js";
@@ -166,13 +166,27 @@ export function podItem(
   };
 }
 
-export function deploymentItem(summary: DeploymentSummary): DeploymentItem {
+// hpa는 이 Deployment를 겨냥한 HPA입니다(ClusterState.hpaOf, docs/guides/T24.md 결정 10).
+export function deploymentItem(
+  summary: DeploymentSummary,
+  hpa?: HpaSummary,
+): DeploymentItem {
   return {
     namespace: summary.namespace,
     name: summary.name,
+    uid: summary.uid,
     desired: summary.desired,
     ready: summary.ready,
     available: summary.available,
+    ...(hpa === undefined
+      ? {}
+      : {
+          hpa: {
+            name: hpa.name,
+            minReplicas: hpa.minReplicas,
+            maxReplicas: hpa.maxReplicas,
+          },
+        }),
   };
 }
 

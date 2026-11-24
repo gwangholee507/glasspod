@@ -2,12 +2,14 @@ import type {
   V1Deployment,
   V1Pod,
   V1ReplicaSet,
+  V2HorizontalPodAutoscaler,
 } from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
 import {
   ClusterState,
   changedFields,
   summarizeDeployment,
+  summarizeHpa,
   summarizePod,
   summarizeReplicaSet,
 } from "./cluster.js";
@@ -275,5 +277,61 @@ describe("ClusterState", () => {
     const state = new ClusterState();
     state.replicaSets.set(summarizeReplicaSet(replicaSet("orders-7d9f8")));
     expect(state.deploymentOf(summarizePod(pod()))).toBeUndefined();
+  });
+});
+
+describe("summarizeHpa, hpaOf", () => {
+  function hpa(
+    name: string,
+    ref: { apiVersion?: string; kind: string; name: string },
+    minReplicas?: number,
+  ): V2HorizontalPodAutoscaler {
+    return {
+      metadata: { namespace: "shop", name, uid: `uid-${name}` },
+      spec: {
+        scaleTargetRef: ref,
+        maxReplicas: 5,
+        ...(minReplicas === undefined ? {} : { minReplicas }),
+      },
+    };
+  }
+
+  it("Deployment를 겨냥한 HPA만 target, minReplicas가 없으면 1", () => {
+    expect(
+      summarizeHpa(
+        hpa(
+          "orders",
+          { apiVersion: "apps/v1", kind: "Deployment", name: "orders" },
+          2,
+        ),
+      ),
+    ).toEqual({
+      namespace: "shop",
+      name: "orders",
+      uid: "uid-orders",
+      target: "orders",
+      minReplicas: 2,
+      maxReplicas: 5,
+    });
+    expect(
+      summarizeHpa(
+        hpa("db", { apiVersion: "apps/v1", kind: "StatefulSet", name: "db" }),
+      ),
+    ).toMatchObject({ target: undefined, minReplicas: 1 });
+  });
+
+  it("그 Deployment를 겨냥한 HPA 가운데 이름순 첫째", () => {
+    const state = new ClusterState();
+    const ref = { apiVersion: "apps/v1", kind: "Deployment", name: "orders" };
+    state.hpas.set(summarizeHpa(hpa("orders-b", ref)));
+    state.hpas.set(summarizeHpa(hpa("orders-a", ref)));
+    state.hpas.set(
+      summarizeHpa(
+        hpa("other", { apiVersion: "apps/v1", kind: "Deployment", name: "x" }),
+      ),
+    );
+    expect(state.hpaOf("shop", "orders")?.name).toBe("orders-a");
+    expect(state.hpaOf("billing", "orders")).toBeUndefined();
+    expect(state.hpaOf("shop", "payments")).toBeUndefined();
   });
 });

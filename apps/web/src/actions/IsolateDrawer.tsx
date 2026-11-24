@@ -103,7 +103,7 @@ export function IsolateDrawer({
     <ActionDrawer
       title="트래픽에서 빼기"
       icon={<IsolateIcon className="size-4" />}
-      pod={pod}
+      targetName={pod.name}
       status={current?.status}
       facts={[
         pod.namespace,

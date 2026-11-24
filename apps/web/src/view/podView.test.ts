@@ -218,9 +218,30 @@ describe("groupPods with isolated pods", () => {
 
 describe("summarizeDeployments", () => {
   const deployments: DeploymentItem[] = [
-    { namespace: "shop", name: "web", desired: 3, ready: 2, available: 2 },
-    { namespace: "shop", name: "load", desired: 1, ready: 1, available: 1 },
-    { namespace: "shop", name: "idle", desired: 0, ready: 0, available: 0 },
+    {
+      namespace: "shop",
+      name: "web",
+      uid: "web",
+      desired: 3,
+      ready: 2,
+      available: 2,
+    },
+    {
+      namespace: "shop",
+      name: "load",
+      uid: "load",
+      desired: 1,
+      ready: 1,
+      available: 1,
+    },
+    {
+      namespace: "shop",
+      name: "idle",
+      uid: "idle",
+      desired: 0,
+      ready: 0,
+      available: 0,
+    },
   ];
 
   it("Pod마다 한 칸(위험 → 주의 → 정상 → 그 밖), 0이 아닌 판단별 수", () => {

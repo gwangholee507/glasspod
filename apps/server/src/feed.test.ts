@@ -108,6 +108,28 @@ describe("PodFeed", () => {
       statusChanges: [],
     });
 
+    // HPA가 붙으면 그 Deployment 항목이 바뀝니다(docs/guides/T24.md 결정 10).
+    clock.now = 11_500;
+    cluster.hpas.set({
+      namespace: "shop",
+      name: "orders",
+      uid: "h",
+      target: "orders",
+      minReplicas: 2,
+      maxReplicas: 4,
+    });
+    expect(tick().deployments).toEqual([
+      {
+        namespace: "shop",
+        name: "orders",
+        uid: "d",
+        desired: 2,
+        ready: 2,
+        available: 2,
+        hpa: { name: "orders", minReplicas: 2, maxReplicas: 4 },
+      },
+    ]);
+
     // 한 Pod에 SDK가 붙고, 다른 Pod와 Deployment가 사라집니다.
     clock.now = 12_000;
     apps.connect(connection({ namespace: "shop", name: "orders-1" }));
