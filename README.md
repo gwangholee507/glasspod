@@ -10,7 +10,11 @@
 </p>
 
 <p align="center">
-  <i>설계 단계입니다. 아직 실행할 수 있는 코드는 없습니다.</i>
+  <img src="https://img.shields.io/badge/status-%EA%B0%9C%EB%B0%9C%20%EC%A4%91-orange" alt="status: 개발 중">
+  <img src="https://img.shields.io/badge/Node.js-22-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22">
+  <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/Kubernetes-326CE5?logo=kubernetes&logoColor=white" alt="Kubernetes">
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License">
 </p>
 
 ---
@@ -18,6 +22,8 @@
 Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 개발자가 보고, 그 판단으로 쿠버네티스 API를 호출해 조치하는 개발 도구**입니다.
 
 쿠버네티스는 컨테이너를 알고, Glasspod는 앱을 압니다.
+
+> 개발 중입니다. 로컬 클러스터(Docker Desktop)에서 관찰부터 조치까지 동작하고, 첫 마일스톤인 [대표 시나리오](docs/design.md#6-대표-시나리오-pod-하나가-느려질-때) 점검을 앞두고 있습니다.
 
 ## 왜 필요한가
 
@@ -28,6 +34,15 @@ Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 �
 - 살아는 있는데 느려지거나 큐가 쌓이는 상태는 헬스체크로 잡히지 않습니다.
 
 Glasspod는 앱 안에 넣은 SDK로 앱 수준의 상태를 보고, 원인을 찾고, 필요하면 바로 조치할 수 있게 돕습니다.
+
+## 주요 기능
+
+- **앱 내부 지표 수집**: SDK가 이벤트 루프 지연, 힙, HTTP 응답 시간, 예외, 앱이 등록한 값(큐 길이 등)을 서버로 보냅니다. 서버가 없거나 연결이 끊겨도 앱은 그대로 동작합니다.
+- **Pod 상태 판단**: 서버가 1초마다 SDK 신호와 쿠버네티스 상태를 합쳐 정상, 앱 멈춤 의심, 연결 끊김, 재시작, Pod 이상 등으로 판단합니다. 재시작이면 OOMKilled 같은 종료 이유와 직전 예외를 원인 후보로 보여 줍니다.
+- **실시간 화면**: Pod 목록은 위험한 Pod를 '지금 볼 것'으로 묶어 맨 위에 둡니다. 상세 화면은 '무슨 일이 있었나' 타임라인, 지표 그래프, snapshot(처리 중인 요청, 상태 값)을 보여 줍니다.
+- **수동 조치**: Pod 재시작, 트래픽에서 빼기(격리), 스케일 조정. 실행 전에 일어날 일과 경고를 보여 주고, 모든 조치를 성공 · 실패와 함께 기록합니다.
+- **최소 권한**: 쿠버네티스 권한은 서버만 가지며, 감시 대상 namespace로 한정한 Role을 씁니다. 브라우저는 쿠버네티스를 직접 부르지 않습니다.
+- **고장 데모 앱**: 일부러 느려지거나, 막히거나, 예외를 쏟거나, 죽거나, 메모리가 늘어나는 주문 앱으로 기능을 직접 확인할 수 있습니다.
 
 ## 동작 방식
 
@@ -41,71 +56,153 @@ Glasspod는 앱 안에 넣은 SDK로 앱 수준의 상태를 보고, 원인을 �
 [웹 화면]  (3) 개발자가 보고, 버튼을 누르면 서버로 요청
 ```
 
-- **SDK**: 앱 안에서 이벤트 루프 지연, 힙 사용량, HTTP 응답 시간, 예외, 개발자가 등록한 값(큐 길이 등)을 모아 서버로 보냅니다. 서버가 없거나 연결이 끊겨도 앱은 그대로 동작합니다.
-- **서버**: 클러스터 안에서 SDK가 보낸 앱 상태와 쿠버네티스의 Pod 상태를 Pod 단위로 합쳐 상태를 판단합니다. 쿠버네티스 권한은 서버만 가집니다.
-- **웹 화면**: Pod 목록과 상세를 보고, 확인창을 거쳐 조치 버튼을 누릅니다.
+- **SDK** (`packages/sdk-node`): 앱 안에서 상태를 모아 서버로 보내고, 서버의 snapshot 요청에 답합니다.
+- **서버** (`apps/server`): 클러스터 안 Deployment로 돌며 SDK 연결과 쿠버네티스 watch를 Pod 단위로 합칩니다. Pod별 최근 30분 기록을 들고 있고, 웹 화면에 조회 API와 SSE로 실시간 변화를 보냅니다.
+- **웹 화면** (`apps/web`): 목록 · 상세를 보고, 확인 서랍을 거쳐 조치를 요청합니다.
 
-## 첫 버전에서 만드는 것
+## 빠르게 시작하기
 
-- Node.js SDK: metrics와 event 전송, snapshot 요청에 응답
-- 서버: SDK 연결 수신, 쿠버네티스 watch, 상태 판단
-- 웹 화면: Pod 목록과 상세
-- 수동 조치: Pod 재시작, 트래픽에서 빼기(격리), 스케일 조정
-- 데모 앱: 일부러 느려지거나 멈추거나 죽는 앱
+### 준비물
 
-그다음에는 자동 규칙(알림만 → 자동), 전체 재시작과 롤백, Spring Boot SDK를 계획하고 있습니다.
+- Node.js 22.22.0 (`.nvmrc`)
+- 클러스터에서 돌려 볼 때: Docker Desktop의 Kubernetes(context `docker-desktop`)와 `kubectl`
 
-지표 장기 저장과 추세 분석(Prometheus의 영역), 로그 수집, 앱 상태를 원격으로 바꾸는 제어는 하지 않습니다.
+```bash
+npm install
+```
 
-## 미리 보기
+### 노트북에서만 띄워 보기 (클러스터 없이)
 
-아직 구현 전이라 패키지 이름과 API는 가칭입니다.
+터미널 네 개에서 서버, 데모 앱, 부하, 웹 화면을 띄웁니다. 쿠버네티스 상태와 조치는 클러스터가 있어야 보입니다.
+
+```bash
+npm run dev:server
+GLASSPOD_SERVER=ws://localhost:8080/agent POD_NAME=demo-1 POD_NAMESPACE=glasspod-demo npm run demo
+npm run demo:load
+npm run dev:web
+```
+
+`http://localhost:5173`을 엽니다.
+
+### 로컬 클러스터에서 띄워 보기
+
+```bash
+kubectl config current-context        # docker-desktop인지 확인
+npm run demo:image && npm run server:image
+kubectl apply -f deploy/demo/         # 데모 앱 Pod 3개 + Service + 부하 Pod
+kubectl apply -f deploy/server/       # 서버 + ServiceAccount + Role
+kubectl -n glasspod port-forward service/glasspod-server 8080:8080
+npm run dev:web                       # 다른 터미널에서
+```
+
+`http://localhost:5173/?namespace=glasspod-demo`를 엽니다.
+
+### 고장 일으켜 보기
+
+데모 앱의 고장 스위치는 Pod 안의 관리 포트(3001)에만 열려 있어 port-forward로 씁니다.
+
+```bash
+kubectl -n glasspod-demo port-forward pod/<Pod 이름> 3001:3001
+curl -s -X POST 'localhost:3001/faults/slow?delayMs=1500'   # 느려짐
+curl -s -X DELETE localhost:3001/faults                     # 모두 끔
+```
+
+| 스위치 | 고장 | 값 (기본) |
+| --- | --- | --- |
+| `POST /faults/slow` | 느려짐 | `delayMs` (1500) |
+| `POST /faults/block` | 이벤트 루프 막힘 | `seconds` (20) |
+| `POST /faults/errors` | 예외 폭주 | `perSecond` (50), `distinct` (1) |
+| `POST /faults/leak` | 메모리 증가 (한도를 넘으면 OOMKilled) | `mbPerSec` (10) |
+| `POST /faults/crash` | 프로세스 종료 | |
+
+이어지는 고장은 같은 경로의 `DELETE`로 끕니다. 자세한 값 범위는 [T10 지침서](docs/guides/T10.md)에 있습니다.
+
+## SDK 쓰기
+
+SDK는 아직 npm에 올리지 않았습니다. 지금은 이 저장소 안에서 `@glasspod/sdk`로 씁니다([데모 앱](examples/demo-app) 참고).
 
 ```js
 import { glasspod } from '@glasspod/sdk';
 
-glasspod.start();                                       // 환경변수에서 서버 주소와 Pod 정보를 읽음
-app.use(glasspod.express());                            // HTTP 요청 자동 수집
+glasspod.start({ app: { name: 'orders', version: '1.4.2' } }); // 환경변수에서 서버 주소와 Pod 정보를 읽음
+app.use(glasspod.express());                            // HTTP 요청 자동 수집 (라우트 앞)
+app.use(glasspod.expressErrors());                      // Express가 잡은 예외를 라우트와 함께 보냄 (라우트 뒤)
 glasspod.gauge('app.queue.length', () => queue.length); // 앱 고유 값 등록
+glasspod.counter('app.orders.created').inc();           // 누적값 등록
 glasspod.state('app.mode', 'ready');                    // 상태 등록, 바뀌면 서버로 알림
+glasspod.exception(err, { route: 'GET /orders' });      // 앱이 잡은 예외 보고
+glasspod.stop();                                        // 종료 처리에서 연결을 닫음
 ```
 
-앱의 Deployment에는 서버 주소(`GLASSPOD_SERVER`)와 Pod 이름, namespace를 환경변수로 넣습니다. 자세한 설정은 [설계 문서 8장](docs/design.md#8-앱-배포-설정)에 있습니다.
+앱의 Deployment에는 환경변수 세 개를 넣습니다. 하나라도 없으면 SDK는 경고 한 줄을 남기고 꺼지며, 앱은 그대로 동작합니다.
 
-## 현재 상태
+```yaml
+env:
+  - name: GLASSPOD_SERVER
+    value: ws://glasspod-server.glasspod.svc.cluster.local:8080/agent
+  - name: POD_NAME
+    valueFrom: { fieldRef: { fieldPath: metadata.name } }
+  - name: POD_NAMESPACE
+    valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+```
 
-설계를 마치고 구현을 시작했습니다. 지금 있는 것은 다음과 같습니다.
+## 설정
 
-- 모노레포 골격(npm workspaces, TypeScript, Vitest)
-- SDK–서버 프로토콜 v1(JSON Schema, 스키마에서 만든 타입, 메시지 검증)
-- 서버 뼈대: `/health`, SDK용 WebSocket `/agent`. `hello`를 받아 `welcome`이나 `reject`로 답하고, 연결된 SDK에 주기마다 `heartbeat`를 보냄
-- Node.js SDK 연결: 환경변수에서 서버 주소와 Pod 정보를 읽어 `hello`를 보내고, 끊기면 1초부터 30초까지 늘려 가며 다시 붙음
-- Node.js SDK metrics: 이벤트 루프 지연·사용률, 메모리, CPU를 스스로 모으고, 앱이 등록한 gauge·counter와 함께 주기마다 보냄
-- Node.js SDK event: 예외, 상태 전환, 앱이 정의한 이벤트를 바로 보냄. 같은 이벤트는 10초마다 묶어 보내고, 처리되지 않은 예외는 프로세스가 끝나기 직전에 보냄
-- Node.js SDK HTTP: Express 미들웨어로 요청 수, 서버 오류, 끊긴 요청, 응답 시간(p50·p99·max), 처리 중인 요청 수를 모아 metrics에 넣음. 라우트에서 난 예외는 `GET /orders/:id` 같은 라우트 모양과 함께 보냄
-- Node.js SDK 끊김 처리: 서버에 붙기 전이나 끊긴 동안의 event를 500개까지 들고 있다가 다시 붙으면 일어난 시각 그대로 보냄. 측정은 끊긴 동안에도 이어 가고, `heartbeat`가 끊기면 응답 없는 연결로 보고 다시 붙음
-- snapshot: `GET /api/pods/:namespace/:name/snapshot`으로 Pod 하나의 지금 상태(상태 값, 처리 중인 요청과 경과 시간, 프로세스 정보)를 그 Pod의 SDK에 물어봄. 5초 안에 답이 없으면 응답 없음(504)으로 알려 앱이 막혔는지 보여 줌
-- 데모 앱: SDK를 넣은 주문 앱 흉내(`examples/demo-app`)와 부하 스크립트. 관리 포트의 HTTP API로 느려짐, 이벤트 루프 막힘, 예외 폭주, 크래시, 메모리 증가를 일부러 일으킴. `npm run dev:server`, `npm run demo`, `npm run demo:load`로 노트북에서 띄워 볼 수 있음
-- 데모 앱 배포: 데모 앱 이미지(`npm run demo:image`)와 로컬 클러스터용 매니페스트(`deploy/demo/`). `kubectl apply -f deploy/demo/`로 `glasspod-demo` namespace에 데모 앱 Pod 3개, Service, 부하 Pod를 띄움. SDK는 Pod 이름과 namespace를 Downward API로 받고, 고장 스위치는 `kubectl port-forward`로 씀. Pod를 지울 때는 5초 기다린 뒤 종료 신호를 받아, 재시작이나 롤아웃 중에도 부하 요청을 잃지 않음
-- 서버 배포: 서버 이미지(`npm run server:image`)와 매니페스트(`deploy/server/`). `kubectl apply -f deploy/server/`로 `glasspod` namespace에 서버를 띄우면 데모 앱 Pod의 SDK가 클러스터 안 주소로 붙음. 서버는 자기 ServiceAccount로 쿠버네티스를 보고, 권한은 감시 대상 namespace에 한정된 Role(읽기, Pod 삭제와 라벨 바꾸기, Service 읽기, Deployment replica 수 바꾸기, HPA 읽기)로 줌. 노트북에서는 `kubectl port-forward`로 서버 API에 닿음
-- 쿠버네티스 watch: 서버가 정한 namespace의 Pod, Deployment, ReplicaSet, 클러스터 이벤트, HPA를 받아 Pod마다 지금 상태(실행 단계, 준비, 재시작 횟수, OOMKilled 같은 마지막 종료 이유)를 들고 있음. 노트북에서는 `GLASSPOD_KUBE_CONTEXT=docker-desktop npm run dev:server`처럼 볼 클러스터의 context를 정해 줌
-- 서버 기록 보관: SDK가 보낸 metrics와 event, 연결 기록, 지워진 Pod의 마지막 모습을 Pod별로 최근 30분 들고 있음(지금은 메모리, `GLASSPOD_STORE=memory`). 빠진 메시지(`seq` 빈틈)와 counter 리셋(앱 재시작)을 알아내고, 5분마다 보관 현황을 로그에 남김
-- 상태 판단: 서버가 1초마다 Pod마다 SDK 신호와 쿠버네티스 상태를 합쳐 정상, 앱 멈춤 의심(연결은 열렸는데 metrics가 끊김), 연결 끊김, 재시작, Pod 이상(CrashLoopBackOff·이미지 오류), 준비 안 됨, 시작 중, SDK 없음, 종료됨 가운데 하나로 판단함. 재시작이면 OOMKilled 같은 종료 이유와 재시작 전 프로세스가 마지막으로 보낸 예외를 원인 후보로 찾음. 지워진 Pod의 남은 SDK 연결은 서버가 닫음
-- 웹 화면 뼈대: React + Vite, React Router, Tailwind CSS. 공통 틀(로고와 메뉴), 목록 자리, Pod 상세 자리(`/pods/:namespace/:name`)에서 snapshot을 불러 원본 JSON과 오류를 보여 줌. `npm run dev:web`으로 띄우면 개발 서버가 `/api` 요청을 Glasspod 서버로 넘김
+서버는 환경변수로 설정합니다. 값이 잘못되면 시작하지 않습니다.
 
-- 웹 조회 API와 실시간 갱신: `GET /api/pods`(Pod별 판단, 쿠버네티스 상태, SDK 연결, 이벤트 루프 지연·힙·요청 응답 시간·5xx/분), `GET /api/pods/:namespace/:name`(마지막 지표 값, 최근 30분 이벤트와 판단 변화, 재시작 원인 후보), `GET /api/status-changes`(최근 30분 판단 변화). `GET /api/stream`(SSE)은 처음에 목록 전체를, 그 뒤 1초마다 바뀐 Pod만 보냄
-- Pod 목록 화면: 왼쪽 메뉴, 가운데 Pod 목록, 오른쪽 자리의 분할 화면. 위험·주의인 Pod를 '지금 볼 것'으로 묶어 맨 위에 두고, Pod마다 상태 배지, 판단 문장, 이벤트 루프 지연·힙·요청 응답 시간, 5xx/분을 실시간으로 보여 줌. '문제'만 보기, Deployment별 묶기, 이름으로 찾기. Pod를 고르기 전 오른쪽에는 Deployment별 요약과 최근 30분 판단 변화 타임라인. 글꼴(Pretendard, Manrope, JetBrains Mono)은 번들에 들어 있어 인터넷 없이도 보임
-- Pod 상세 화면: '무슨 일이 있었나'(앱 예외와 이벤트, 쿠버네티스 이벤트, SDK 연결, 판단 변화, 재시작을 한 줄씩, 재시작 직전 예외에 '원인 후보' 표시), 지표 그래프 4개(힙, 이벤트 루프 지연, 요청 응답 시간, 고르는 앱 지표. 같은 Deployment의 다른 Pod 선과 재시작 표시, 5·15·30분), snapshot(처리 중인 요청, 상태 값, 프로세스). 서버는 그래프용 시계열 API(`GET /api/pods/:namespace/:name/series`)와 Pod에 대한 쿠버네티스 이벤트 30분 보관을 더함
+| 환경변수 | 기본값 | 설명 |
+| --- | --- | --- |
+| `GLASSPOD_PORT` | `8080` | HTTP API와 SDK WebSocket(`/agent`) 포트 |
+| `GLASSPOD_NAMESPACES` | `glasspod-demo` | watch할 namespace (쉼표로 여러 개) |
+| `GLASSPOD_ACTION_NAMESPACES` | 없음 (조치 꺼짐) | 조치를 허용할 namespace. `GLASSPOD_NAMESPACES` 안에 있어야 함 |
+| `GLASSPOD_KUBE_CONTEXT` | 없음 | 클러스터 밖에서 쓸 kubeconfig context. 없으면 클러스터 안 ServiceAccount, 둘 다 없으면 watch를 끔 |
+| `GLASSPOD_METRICS_INTERVAL_MS` | `5000` | SDK의 metrics 전송 주기 |
+| `GLASSPOD_MAX_EVENTS_PER_MINUTE` | `120` | SDK가 1분에 보낼 수 있는 event 수 |
+| `GLASSPOD_HEARTBEAT_INTERVAL_MS` | `15000` | 서버 heartbeat 주기 |
+| `GLASSPOD_STORE` | `memory` | 기록 저장소 (지금은 `memory`만) |
 
-- 조치 공통과 Pod 재시작: 상세 화면의 '재시작'을 누르면 오른쪽 서랍이 대상, 일어날 일, 재시작하는 동안 트래픽을 받을 같은 Deployment의 Pod와 그 판단, 경고를 보여 주고, 확인하면 서버가 쿠버네티스에서 Pod를 지움(새 Pod는 ReplicaSet이 만듦). 서버는 `GLASSPOD_ACTION_NAMESPACES`에 적은 namespace에서만 조치하고, 화면이 확인한 Pod와 같은 Pod인지(uid) 보고 실행함. 모든 조치는 성공·실패와 함께 기록되어 조치 기록 화면(`/actions`), 상세의 조치 기록 칸, 타임라인에 실시간으로 보임
+웹 개발 서버는 `/api` 요청을 `GLASSPOD_WEB_PROXY_TARGET`(기본 `http://localhost:8080`)으로 넘깁니다.
 
-- 트래픽에서 빼기(격리)와 격리된 Pod: 상세 화면의 '트래픽에서 빼기'를 누르면 서랍이 뗄 라벨(데모 앱은 `app=demo-app`)과 빠질 Service, 대신할 Pod를 만들 ReplicaSet을 미리 보여 주고, 확인하면 서버가 그 라벨을 떼고 `glasspod/isolated=true` 라벨과 격리 정보 주석을 붙임. 새 Pod가 트래픽을 받는 동안 뺀 Pod는 살아 있어 지표와 snapshot을 계속 볼 수 있음. 격리된 Pod는 목록 맨 아래 '격리됨' 묶음과 격리된 Pod 화면(`/isolated`)에 모이고, 조사가 끝나면 거기서 지움. 격리 정보는 Pod에 남아 서버를 다시 시작해도 사라지지 않음
+## 프로젝트 구조
 
-- 스케일 조정: 한눈에 보기의 Deployment 카드에서 '스케일 조정'을 누르면 서랍에서 replica 수(0~20)를 고르고, 늘거나 줄 Pod와 경고를 본 뒤 서버가 쿠버네티스에서 replica 수를 바꿈. 서버는 HPA도 지켜보다가 HPA가 붙은 Deployment에는 카드와 서랍에 'HPA가 다시 바꿀 수 있음'을 알림
+```text
+packages/
+  protocol/    SDK–서버 프로토콜 v1 (JSON Schema, 생성한 타입, 검증)
+  sdk-node/    Node.js SDK
+apps/
+  server/      Glasspod 서버 (Express + ws, @kubernetes/client-node)
+  web/         웹 화면 (React + Vite)
+examples/
+  demo-app/    고장 스위치가 있는 데모 주문 앱과 부하 스크립트
+deploy/
+  demo/        데모 앱 매니페스트
+  server/      서버 매니페스트와 RBAC
+docs/          설계 문서, 작업별 지침서, 작업 기록
+```
 
-수동 조치 세 가지(재시작, 트래픽에서 빼기, 스케일 조정)를 모두 만들었습니다.
+## 개발
 
-첫 마일스톤은 [대표 시나리오](docs/design.md#6-대표-시나리오-pod-하나가-느려질-때)를 로컬 클러스터에서 처음부터 끝까지 돌려 보는 것입니다. 느려진 Pod 하나를 화면에서 찾고, 트래픽에서 뺀 채로 원인을 확인한 뒤 삭제합니다.
+```bash
+npm run typecheck     # 타입 검사
+npm test              # 테스트 (Vitest)
+npm run format:check  # 코드 스타일 검사 (Prettier)
+npm run generate      # 프로토콜 스키마에서 타입 다시 만들기
+```
+
+## 로드맵
+
+- [x] Node.js SDK: metrics · event · HTTP 수집, 끊김 처리, snapshot 응답
+- [x] 서버: SDK 연결, 쿠버네티스 watch, 기록 보관, 상태 판단, 조회 API와 SSE
+- [x] 웹 화면: Pod 목록 · 상세, 조치 기록, 격리된 Pod
+- [x] 수동 조치: Pod 재시작, 트래픽에서 빼기(격리), 스케일 조정
+- [x] 데모 앱과 로컬 클러스터 배포
+- [ ] 서버가 웹 화면을 함께 제공
+- [ ] 첫 마일스톤: 대표 시나리오를 로컬 클러스터에서 처음부터 끝까지 점검
+- [ ] 자동 규칙(알림만 → 자동), 전체 재시작과 롤백, Spring Boot SDK, PostgreSQL 저장소
+
+지표 장기 저장과 추세 분석(Prometheus의 영역), 로그 수집, 앱 상태를 원격으로 바꾸는 제어는 하지 않습니다.
+
+## 문서
 
 | 문서 | 내용 |
 | --- | --- |
@@ -113,7 +210,9 @@ glasspod.state('app.mode', 'ready');                    // 상태 등록, 바뀌
 | [docs/guides/](docs/guides/) | 작업별 지침서: 범위와 완료 기준 |
 | [docs/logs/](docs/logs/) | 일자별 작업 기록 |
 
-기술 스택: Node.js 22, TypeScript, Vitest, npm workspaces, JSON Schema(Ajv), Express + `ws`, `@kubernetes/client-node`, React + Vite, React Router, Tailwind CSS, Docker, Kubernetes(로컬은 Docker Desktop)
+## 기술 스택
+
+Node.js 22 · TypeScript · Vitest · npm workspaces · JSON Schema(Ajv) · Express + `ws` · `@kubernetes/client-node` · React + Vite · React Router · Tailwind CSS · uPlot · Docker · Kubernetes
 
 ## 라이선스
 
