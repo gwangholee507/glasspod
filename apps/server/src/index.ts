@@ -9,6 +9,7 @@ import { AGENT_PATH, attachAgentServer } from "./agent.js";
 import { AgentRegistry } from "./agents.js";
 import { createApp } from "./app.js";
 import { PodFeed } from "./feed.js";
+import { OutlierMonitor } from "./outliers.js";
 import { ClusterState } from "./cluster.js";
 import { loadConfig } from "./config.js";
 import type { ServerConfig } from "./config.js";
@@ -70,6 +71,13 @@ const statuses = new StatusMonitor({
   store,
   metricsIntervalMs: config.metricsIntervalMs,
 });
+// 같은 Deployment의 다른 Pod와 지표를 비교해 눈에 띄게 높은 값을 찾습니다(docs/guides/T34.md). 판단과 따로입니다.
+const outliers = new OutlierMonitor({
+  statuses,
+  apps,
+  cluster,
+  metricsIntervalMs: config.metricsIntervalMs,
+});
 // 판단 주기마다 만드는 웹 화면용 목록과, 그 변화를 받는 SSE 연결입니다.
 const feed = new PodFeed({
   statuses,
@@ -77,6 +85,8 @@ const feed = new PodFeed({
   cluster,
   namespaces: config.namespaces,
   actionNamespaces: config.actionNamespaces,
+  metricsIntervalMs: config.metricsIntervalMs,
+  outliers,
 });
 const streams = new StreamHub();
 // 조치 실행과 기록입니다. 끝난 조치는 다음 판단 주기의 SSE changes로 화면에 갑니다.
@@ -127,6 +137,7 @@ const statsTimer = setInterval(() => void apps.logStats(), STATS_INTERVAL_MS);
 const statusTimer = setInterval(() => {
   try {
     const changes = statuses.evaluate();
+    outliers.evaluate();
     streams.broadcast(feed.refresh(changes));
   } catch (error) {
     log.error("pod status failed", {

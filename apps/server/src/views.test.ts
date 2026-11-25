@@ -21,6 +21,8 @@ import {
 } from "./views.js";
 
 const NOW = 1_000_000;
+// 목록 지표의 오래된 값 기준입니다(지표 주기 5초의 3주기).
+const FRESH_MS = 15_000;
 const POD = { namespace: "shop", name: "orders-1" };
 
 function gauge(value: number): LatestValue {
@@ -49,6 +51,7 @@ function app(
     missed: 0,
     values: new Map(Object.entries(values)),
     increases: new Map(Object.entries(increases)),
+    errorEvents: [],
     ...fields,
   };
 }
@@ -131,6 +134,7 @@ describe("listMetrics", () => {
         },
       ),
       NOW,
+      FRESH_MS,
     );
     expect(metrics).toEqual({
       eventLoopP99Ms: 10.6,
@@ -142,17 +146,53 @@ describe("listMetrics", () => {
   });
 
   it("leaves out metrics the instance does not send", () => {
-    expect(listMetrics(undefined, NOW)).toEqual({});
+    expect(listMetrics(undefined, NOW, FRESH_MS)).toEqual({});
     expect(
-      listMetrics(app({ "runtime.heap.used_bytes": gauge(1) }), NOW),
+      listMetrics(app({ "runtime.heap.used_bytes": gauge(1) }), NOW, FRESH_MS),
     ).toEqual({ heapUsedBytes: 1 });
     // counter가 있으면 최근 1분에 늘어난 것이 없어도 0입니다.
     expect(
       listMetrics(
         app({ "http.requests.errors_total": { ...gauge(0), kind: "counter" } }),
         NOW,
+        FRESH_MS,
       ),
     ).toEqual({ http5xxPerMinute: 0 });
+  });
+
+  it("leaves out values older than three metrics periods", () => {
+    // 요청이 끊긴 Pod는 요청 p99를 더 받지 않아 마지막 값이 오래됩니다(docs/guides/T34.md 결정 4).
+    const stale = (value: number): LatestValue => ({
+      ...gauge(value),
+      receivedAt: NOW - FRESH_MS - 1,
+    });
+    expect(
+      listMetrics(
+        app(
+          {
+            "runtime.heap.used_bytes": gauge(5),
+            "http.requests.duration_p99_ms": stale(31),
+            "http.requests.errors_total": { ...stale(9), kind: "counter" },
+          },
+          { "http.requests.errors_total": [{ at: NOW - 20_000, increase: 3 }] },
+        ),
+        NOW,
+        FRESH_MS,
+      ),
+    ).toEqual({ heapUsedBytes: 5 });
+    // 딱 3주기 된 값은 씁니다.
+    expect(
+      listMetrics(
+        app({
+          "http.requests.duration_p99_ms": {
+            ...gauge(31),
+            receivedAt: NOW - FRESH_MS,
+          },
+        }),
+        NOW,
+        FRESH_MS,
+      ),
+    ).toEqual({ httpP99Ms: 31 });
   });
 });
 
@@ -163,6 +203,7 @@ describe("podItem", () => {
       summary(),
       app({ "runtime.heap.used_bytes": gauge(5) }),
       NOW,
+      FRESH_MS,
     );
     expect(item).toEqual({
       pod: POD,
@@ -221,11 +262,29 @@ describe("podItem", () => {
       summary({ lastTermination: undefined, ip: undefined }),
       undefined,
       NOW,
+      FRESH_MS,
     );
     expect(item).not.toHaveProperty("sdk");
     expect(item).not.toHaveProperty("deployment");
     expect(item.kube).not.toHaveProperty("lastTermination");
     expect(item.metrics).toEqual({});
+    expect(item).not.toHaveProperty("outliers");
+  });
+
+  it("adds outliers only when there are some", () => {
+    const outlier = {
+      metric: "http.requests.duration_p99_ms",
+      value: 1003,
+      peerMedian: 31,
+      peers: 2,
+      since: NOW - 20_000,
+    };
+    expect(
+      podItem(entry(), summary(), undefined, NOW, FRESH_MS, [outlier]).outliers,
+    ).toEqual([outlier]);
+    expect(
+      podItem(entry(), summary(), undefined, NOW, FRESH_MS, []),
+    ).not.toHaveProperty("outliers");
   });
 });
 
@@ -261,7 +320,7 @@ describe("podDetail", () => {
         },
       ],
     };
-    const item = podItem(entry(), summary(), undefined, NOW);
+    const item = podItem(entry(), summary(), undefined, NOW, FRESH_MS);
     const detail = podDetail(
       item,
       app({
@@ -301,6 +360,7 @@ describe("podDetail", () => {
       undefined,
       undefined,
       NOW,
+      FRESH_MS,
     );
     const detail = podDetail(
       item,
@@ -371,6 +431,7 @@ describe("seriesPods", () => {
       undefined,
       undefined,
       NOW,
+      FRESH_MS,
     );
   }
 

@@ -15,6 +15,7 @@ import type {
   PodListMetrics,
   PodMetricSeries,
   PodMetricValue,
+  PodOutlier,
   PodRef,
   PodRestart,
   PodSdk,
@@ -23,7 +24,7 @@ import type {
 import type { DeploymentSummary, HpaSummary, PodSummary } from "./cluster.js";
 import { isNamespaceName } from "./config.js";
 import type { AppState } from "./pods.js";
-import { INCREASE_WINDOW_MS } from "./pods.js";
+import { recentIncrease } from "./pods.js";
 import type { RestartInfo } from "./status.js";
 import { pickRestartCauses } from "./status.js";
 import type { PodStatusEntry } from "./status-monitor.js";
@@ -49,33 +50,30 @@ export const LIST_METRIC_NAMES = {
 // 5xx/분은 이 counter의 최근 60초 증가량 합입니다.
 export const HTTP_ERRORS_COUNTER = "http.requests.errors_total";
 
-// 목록 지표입니다. 지금 instance가 그 지표를 보내지 않았으면 필드가 없습니다.
+// 목록 지표입니다. 지금 instance가 그 지표를 보내지 않았거나, 받은 지 freshMs보다 지났으면 필드가 없습니다
+// (docs/guides/T34.md 결정 4). freshMs는 '앱 멈춤 의심'과 같은 3 × max(주기, 1000ms)입니다.
 export function listMetrics(
   app: AppState | undefined,
   now: number,
+  freshMs: number,
 ): PodListMetrics {
   const metrics: PodListMetrics = {};
   if (app === undefined) {
     return metrics;
   }
+  const since = now - freshMs;
   for (const [field, name] of Object.entries(LIST_METRIC_NAMES) as [
     keyof typeof LIST_METRIC_NAMES,
     string,
   ][]) {
     const value = app.values.get(name);
-    if (value !== undefined) {
+    if (value !== undefined && value.receivedAt >= since) {
       metrics[field] = value.value;
     }
   }
-  if (app.values.has(HTTP_ERRORS_COUNTER)) {
-    const since = now - INCREASE_WINDOW_MS;
-    let sum = 0;
-    for (const entry of app.increases.get(HTTP_ERRORS_COUNTER) ?? []) {
-      if (entry.at >= since) {
-        sum += entry.increase;
-      }
-    }
-    metrics.http5xxPerMinute = sum;
+  const errors = app.values.get(HTTP_ERRORS_COUNTER);
+  if (errors !== undefined && errors.receivedAt >= since) {
+    metrics.http5xxPerMinute = recentIncrease(app, HTTP_ERRORS_COUNTER, now);
   }
   return metrics;
 }
@@ -144,11 +142,14 @@ export function restartItem(restart: RestartInfo): PodRestart {
 }
 
 // 목록의 Pod 항목입니다. 판단의 silentMs는 판단 주기마다 바뀌므로 넣지 않습니다(결정 11).
+// freshMs는 목록 지표의 오래된 값 기준, outliers는 같은 Deployment의 다른 Pod보다 높은 값입니다(docs/guides/T34.md).
 export function podItem(
   entry: PodStatusEntry,
   summary: PodSummary | undefined,
   app: AppState | undefined,
   now: number,
+  freshMs: number,
+  outliers: readonly PodOutlier[] = [],
 ): PodItem {
   return {
     pod: { namespace: entry.pod.namespace, name: entry.pod.name },
@@ -162,7 +163,8 @@ export function podItem(
       : { restart: restartItem(entry.restart) }),
     ...(summary === undefined ? {} : { kube: kubeItem(summary) }),
     ...(app === undefined ? {} : { sdk: sdkItem(app) }),
-    metrics: listMetrics(app, now),
+    metrics: listMetrics(app, now, freshMs),
+    ...(outliers.length === 0 ? {} : { outliers: [...outliers] }),
   };
 }
 

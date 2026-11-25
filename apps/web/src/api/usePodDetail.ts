@@ -60,7 +60,12 @@ function chartsFor(
   detail: PodDetailBody | undefined,
   selected: string | undefined,
 ): ChartSpec[] {
-  const fourth = chooseFourthChart(detail?.values ?? [], selected);
+  // 다른 Pod보다 높은 값을 네 번째 그래프의 기본값으로 먼저 고릅니다(docs/guides/T34.md 결정 16).
+  const fourth = chooseFourthChart(
+    detail?.values ?? [],
+    selected,
+    detail?.item.outliers?.map((outlier) => outlier.metric),
+  );
   return fourth === undefined ? [...FIXED_CHARTS] : [...FIXED_CHARTS, fourth];
 }
 

@@ -135,7 +135,8 @@ export interface PodSdk {
   missed: number;
 }
 
-// 목록에 보이는 지표입니다(design.md 5.3). 그 지표를 받지 못했으면 필드가 없습니다.
+// 목록에 보이는 지표입니다(design.md 5.3). 그 지표를 받지 못했거나, 받은 지 3 × max(주기, 1000ms)보다
+// 지났으면(요청이 끊긴 Pod의 요청 p99 등) 필드가 없습니다(docs/guides/T34.md 결정 4).
 export interface PodListMetrics {
   // runtime.event_loop.lag_p99_ms 마지막 값
   eventLoopP99Ms?: number;
@@ -146,6 +147,21 @@ export interface PodListMetrics {
   httpP99Ms?: number;
   // http.requests.errors_total의 최근 60초 증가량 합(서버가 받은 시각 기준)
   http5xxPerMinute?: number;
+}
+
+// 같은 Deployment의 다른 Pod보다 눈에 띄게 높은 값입니다(docs/guides/T34.md 결정 1, 2, 11).
+// 다른 Pod 값의 중앙값의 2배 이상이고 최소 차이 이상인 상태가 15초(지표 3주기) 이어지면 생깁니다.
+export interface PodOutlier {
+  // 비교한 값입니다. SDK gauge는 지표 이름, 5xx/분은 "http.requests.errors_total", 예외/분은 "event:error"입니다.
+  metric: string;
+  // 이 Pod의 값과 같은 Deployment의 다른 Pod 값의 중앙값입니다. 단위는 지표 그대로(ms, bytes),
+  // 5xx와 예외는 최근 60초 동안의 개수(분당)입니다.
+  value: number;
+  peerMedian: number;
+  // 비교한 다른 Pod 수입니다.
+  peers: number;
+  // 높은 상태가 시작된 시각(서버 시계)입니다. 강조는 그 뒤 15초가 지나야 생깁니다.
+  since: number;
 }
 
 // 목록의 Pod 항목입니다. 판단 주기(1초)마다 다시 만들고, 바뀌면 SSE로 보냅니다.
@@ -163,6 +179,8 @@ export interface PodItem {
   kube?: PodKube;
   sdk?: PodSdk;
   metrics: PodListMetrics;
+  // 같은 Deployment의 다른 Pod보다 높은 값입니다. 있을 때만 있습니다(T34). 판단(status)과 따로입니다.
+  outliers?: PodOutlier[];
 }
 
 // 이 Deployment를 겨냥한 HPA입니다(docs/guides/T24.md 결정 3, 9). HPA는 수동으로 바꾼 replica 수를 다시 덮어씁니다.

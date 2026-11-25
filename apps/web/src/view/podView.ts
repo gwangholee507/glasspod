@@ -4,6 +4,7 @@ import type {
   ActionItem,
   DeploymentItem,
   PodItem,
+  PodSeverity,
   PodStatus,
   PodStatusChange,
 } from "@glasspod/protocol";
@@ -28,9 +29,35 @@ export function isIsolated(item: PodItem | undefined): boolean {
   return item?.kube?.isolation !== undefined;
 }
 
-// '지금 볼 것'에 들어가는 Pod입니다(위험, 주의). 일부러 뺀 Pod는 넣지 않습니다.
+// 같은 Deployment의 다른 Pod보다 높은 값이 있는 Pod입니다(docs/guides/T34.md).
+export function hasOutliers(item: PodItem): boolean {
+  return (item.outliers?.length ?? 0) > 0;
+}
+
+// 목록에서 강조할 수준입니다. 판단의 강조가 없어도 다른 Pod보다 높은 값이 있으면 주의입니다(T34 결정 15).
+// 일부러 뺀(격리된) Pod는 강조하지 않습니다.
+export function attentionSeverity(item: PodItem): PodSeverity {
+  if (isIsolated(item)) {
+    return "none";
+  }
+  if (item.severity === "none" && hasOutliers(item)) {
+    return "warning";
+  }
+  return item.severity;
+}
+
+// 항목의 강조 색입니다. 판단의 색에 강조가 없으면 다른 Pod보다 높은 값이 있을 때 주의 색입니다.
+export function attentionTone(item: PodItem): Tone {
+  const tone = statusTone(item.status);
+  return (tone === "ok" || tone === "neutral") &&
+    attentionSeverity(item) === "warning"
+    ? "warning"
+    : tone;
+}
+
+// '지금 볼 것'에 들어가는 Pod입니다(위험, 주의, 다른 Pod보다 높은 값). 일부러 뺀 Pod는 넣지 않습니다.
 export function needsAttention(item: PodItem): boolean {
-  return item.severity !== "none" && !isIsolated(item);
+  return attentionSeverity(item) !== "none";
 }
 
 function compareNames(a: PodItem, b: PodItem): number {
@@ -40,10 +67,10 @@ function compareNames(a: PodItem, b: PodItem): number {
   return a.pod.name < b.pod.name ? -1 : a.pod.name > b.pod.name ? 1 : 0;
 }
 
-// 위험 먼저, 같은 강조는 판단 표의 순서, 그다음 이름순입니다(결정 7).
+// 위험 먼저, 같은 강조는 판단 표의 순서, 그다음 이름순입니다(결정 7). 다른 Pod보다 높은 값은 주의로 봅니다(T34).
 export function compareBySeverity(a: PodItem, b: PodItem): number {
   return (
-    severityRank(a.severity) - severityRank(b.severity) ||
+    severityRank(attentionSeverity(a)) - severityRank(attentionSeverity(b)) ||
     STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status) ||
     compareNames(a, b)
   );
@@ -84,7 +111,7 @@ const ISOLATED_TITLE = "격리됨";
 
 // 묶음 안에서 가장 강한 강조입니다. Deployment별 묶음의 점 색에 씁니다.
 function strongestTone(pods: readonly PodItem[]): Tone {
-  const tones = pods.map((item) => statusTone(item.status));
+  const tones = pods.map(attentionTone);
   if (tones.includes("critical")) return "critical";
   if (tones.includes("warning")) return "warning";
   if (tones.includes("ok")) return "ok";

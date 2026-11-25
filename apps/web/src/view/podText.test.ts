@@ -1,4 +1,4 @@
-import type { PodItem, PodStatusChange } from "@glasspod/protocol";
+import type { PodItem, PodOutlier, PodStatusChange } from "@glasspod/protocol";
 import { describe, expect, it } from "vitest";
 import {
   changeSentence,
@@ -6,6 +6,10 @@ import {
   formatDuration,
   formatMegabytes,
   formatMs,
+  formatOutlierValue,
+  outlierLabel,
+  outlierLine,
+  outlierSentence,
   podSentence,
   statusTone,
   timeLabel,
@@ -139,6 +143,58 @@ describe("statusTone", () => {
   });
 });
 
+describe("outliers", () => {
+  function outlier(fields: Partial<PodOutlier>): PodOutlier {
+    return {
+      metric: "http.requests.duration_p99_ms",
+      value: 1003.4,
+      peerMedian: 30.9,
+      peers: 2,
+      since: NOW - 45_000,
+      ...fields,
+    };
+  }
+
+  it("formats each kind of value like the list cells", () => {
+    expect(formatOutlierValue("runtime.event_loop.lag_p99_ms", 2140)).toBe(
+      "2,140 ms",
+    );
+    expect(formatOutlierValue("http.requests.duration_p99_ms", 4.25)).toBe(
+      "4.3 ms",
+    );
+    expect(
+      formatOutlierValue("runtime.heap.used_bytes", 73 * 1024 * 1024),
+    ).toBe("73 MB");
+    expect(formatOutlierValue("http.requests.errors_total", 95)).toBe("95/분");
+    expect(formatOutlierValue("event:error", 2999.6)).toBe("3,000/분");
+    expect(formatOutlierValue("app.queue.length", 1234.56)).toBe("1,234.6");
+    expect(outlierLabel("event:error")).toBe("예외");
+    expect(outlierLabel("app.queue.length")).toBe("app.queue.length");
+  });
+
+  it("writes the list line and the detail sentence", () => {
+    const outliers = [
+      outlier({}),
+      outlier({
+        metric: "app.queue.length",
+        value: 12,
+        peerMedian: 0,
+        peers: 1,
+        since: NOW - 20_000,
+      }),
+    ];
+    expect(outlierLine(outliers)).toBe(
+      "다른 Pod보다 높음 · 요청 p99 1,003 ms (다른 Pod 31 ms) · app.queue.length 12 (다른 Pod 0)",
+    );
+    expect(outlierSentence(outliers, NOW)).toBe(
+      "같은 Deployment의 다른 Pod 2개보다 높습니다: 요청 p99 1,003 ms (다른 Pod 중앙값 31 ms), app.queue.length 12 (다른 Pod 중앙값 0) · 45초째",
+    );
+    expect(outlierLine(undefined)).toBe(undefined);
+    expect(outlierLine([])).toBe(undefined);
+    expect(outlierSentence([], NOW)).toBe(undefined);
+  });
+});
+
 describe("podSentence", () => {
   it("멈춤 의심은 마지막 metrics(없으면 연결 시각)부터 센 시간", () => {
     expect(
@@ -204,6 +260,23 @@ describe("podSentence", () => {
 
   it("나머지 판단", () => {
     expect(podSentence(item({}), NOW)).toBe("이상 신호 없음");
+    // 다른 Pod보다 높은 값이 있으면 '이상 신호 없음'이라 쓰지 않습니다(T34).
+    expect(
+      podSentence(
+        item({
+          outliers: [
+            {
+              metric: "app.queue.length",
+              value: 12,
+              peerMedian: 0,
+              peers: 2,
+              since: NOW,
+            },
+          ],
+        }),
+        NOW,
+      ),
+    ).toBe("연결과 쿠버네티스 상태는 정상");
     expect(podSentence(item({ status: "no-sdk" }), NOW)).toBe(
       "쿠버네티스 정보만 봄",
     );

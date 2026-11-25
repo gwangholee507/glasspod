@@ -203,7 +203,7 @@ function IsolatedCard({
       <p className="text-xs text-slate-500">
         {item.sdk === undefined
           ? "이 Pod에는 SDK가 없어 앱 지표가 없습니다."
-          : "새 요청이 없으면 요청 p99는 마지막으로 받은 값에 머뭅니다. 지표와 snapshot은 계속 받습니다."}
+          : "새 요청이 없으면 요청 p99는 지표 3주기(기본 15초) 뒤 '—'로 바뀝니다. 지표와 snapshot은 계속 받습니다."}
       </p>
     </article>
   );

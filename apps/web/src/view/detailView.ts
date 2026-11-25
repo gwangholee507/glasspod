@@ -305,14 +305,19 @@ export function fourthChartOptions(
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
-// 네 번째 그래프 지표입니다. 고른 것이 없거나 이 Pod에 없으면 기본값: 첫 app.* gauge → 5xx counter → 첫 번째.
+// 네 번째 그래프 지표입니다. 고른 것이 없거나 이 Pod에 없으면 기본값: 다른 Pod보다 높은 값(preferred 순서,
+// docs/guides/T34.md 결정 16) → 첫 app.* gauge → 5xx counter → 첫 번째.
 export function chooseFourthChart(
   values: readonly PodMetricValue[],
   selected: string | undefined,
+  preferred: readonly string[] = [],
 ): ChartSpec | undefined {
   const options = fourthChartOptions(values);
   const pick =
     options.find((value) => value.name === selected) ??
+    preferred
+      .map((name) => options.find((value) => value.name === name))
+      .find((value) => value !== undefined) ??
     options.find(
       (value) => value.name.startsWith("app.") && value.kind === "gauge",
     ) ??

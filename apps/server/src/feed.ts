@@ -6,11 +6,13 @@ import type {
   PodItem,
   PodListBody,
   PodListChanges,
+  PodOutlier,
   PodRef,
 } from "@glasspod/protocol";
 import type { ClusterState } from "./cluster.js";
 import type { AppStates } from "./pods.js";
 import { podKey } from "./pod-key.js";
+import { stallLimitMs } from "./status.js";
 import type { StatusMonitor } from "./status-monitor.js";
 import type { StatusChangeRecord } from "./store/store.js";
 import { deploymentItem, podItem, statusChangeItem } from "./views.js";
@@ -23,6 +25,10 @@ export interface PodFeedOptions {
   namespaces: readonly string[];
   // GLASSPOD_ACTION_NAMESPACES입니다. 목록 본문에 그대로 넣습니다(docs/guides/T21.md 결정 12).
   actionNamespaces?: readonly string[];
+  // SDK 지표 주기입니다. 목록 지표의 오래된 값 기준(3주기)을 정합니다(docs/guides/T34.md 결정 4).
+  metricsIntervalMs: number;
+  // 같은 Deployment의 다른 Pod보다 높은 값입니다(OutlierMonitor, T34). 없으면 outliers를 넣지 않습니다.
+  outliers?: { get(pod: PodRef): readonly PodOutlier[] };
   now?: () => number;
 }
 
@@ -46,6 +52,8 @@ export class PodFeed {
   private readonly cluster: ClusterState;
   private readonly watched: readonly string[];
   private readonly actionNamespaces: readonly string[];
+  private readonly freshMs: number;
+  private readonly outliers: PodFeedOptions["outliers"];
   private readonly now: () => number;
   // 앞 주기 뒤에 끝난 조치입니다. 다음 refresh의 changes에 넣고 비웁니다.
   private pendingActions: ActionItem[] = [];
@@ -60,6 +68,8 @@ export class PodFeed {
     this.cluster = options.cluster;
     this.watched = options.namespaces;
     this.actionNamespaces = options.actionNamespaces ?? [];
+    this.freshMs = stallLimitMs(options.metricsIntervalMs);
+    this.outliers = options.outliers;
     this.now = options.now ?? Date.now;
     this.namespaces = [...this.watched];
     this.serverTime = this.now();
@@ -85,6 +95,8 @@ export class PodFeed {
         this.cluster.pods.get(entry.pod.namespace, entry.pod.name),
         this.apps.get(entry.pod),
         now,
+        this.freshMs,
+        this.outliers?.get(entry.pod),
       );
       nextPods.set(podKey(item.pod), { item, json: JSON.stringify(item) });
     }

@@ -42,6 +42,12 @@ export interface CounterIncrease {
   increase: number;
 }
 
+// error 수준 event 하나의 count입니다. at은 서버가 받은 시각입니다.
+export interface ErrorEventCount {
+  at: number;
+  count: number;
+}
+
 // Pod 하나의 지금 상태입니다. 상태 판단(T13)이 읽고, 고치지 않습니다.
 export interface AppState {
   readonly pod: PodRef;
@@ -70,6 +76,9 @@ export interface AppState {
   // counter 이름마다 최근 증가량입니다(받은 순서). 넣을 때 INCREASE_WINDOW_MS보다 오래된 것을 지우므로,
   // 읽는 쪽도 시각으로 다시 거릅니다. instance가 바뀌어도 남깁니다(리셋은 새 값만큼 늘어난 것으로 셈).
   readonly increases: ReadonlyMap<string, readonly CounterIncrease[]>;
+  // 지금 연결에서 받은 error 수준 event의 count입니다(받은 순서). 지표 비교의 예외/분이 씁니다(docs/guides/T34.md 결정 13).
+  // increases처럼 넣을 때 INCREASE_WINDOW_MS보다 오래된 것을 지우고, instance가 바뀌어도 남깁니다.
+  readonly errorEvents: readonly ErrorEventCount[];
 }
 
 interface TrackedState {
@@ -89,6 +98,7 @@ interface TrackedState {
   missed: number;
   values: Map<string, LatestValue>;
   increases: Map<string, CounterIncrease[]>;
+  errorEvents: ErrorEventCount[];
   // 지금 상태를 바꾸는 연결(마지막으로 hello를 받아들인 연결)입니다.
   connection: AppConnection;
   // counter 리셋을 판단할 앞 점입니다. instance가 바뀌어도 남겨 둡니다.
@@ -133,6 +143,7 @@ export class AppStates {
         missed: 0,
         values: new Map(),
         increases: new Map(),
+        errorEvents: [],
         connection,
         counters: new Map(),
         names: new Set(),
@@ -203,7 +214,7 @@ export class AppStates {
         at,
       );
     } else if (message.type === "event") {
-      this.recordEvent(connection, message, at);
+      this.recordEvent(connection, current ? state : undefined, message, at);
     }
     // response와 무시한 두 번째 hello는 seq만 봅니다. snapshot은 보관하지 않습니다(T09).
   }
@@ -442,12 +453,17 @@ export class AppStates {
     );
   }
 
+  // current는 지금 상태를 바꿀 연결이면 그 Pod의 상태, 예전 연결이면 undefined입니다.
   private recordEvent(
     connection: AppConnection,
+    current: TrackedState | undefined,
     message: EventMessage,
     at: number,
   ): void {
     const { hello } = connection;
+    if (current !== undefined && message.level === "error") {
+      recordErrorEvent(current, at, message.count);
+    }
     this.write(
       "events",
       hello.pod,
@@ -478,6 +494,34 @@ export class AppStates {
   }
 }
 
+// counter의 최근 INCREASE_WINDOW_MS 증가량 합입니다(서버가 받은 시각 기준). 목록의 5xx/분과 지표 비교가 씁니다.
+export function recentIncrease(
+  app: AppState,
+  name: string,
+  now: number,
+): number {
+  const since = now - INCREASE_WINDOW_MS;
+  let sum = 0;
+  for (const entry of app.increases.get(name) ?? []) {
+    if (entry.at >= since) {
+      sum += entry.increase;
+    }
+  }
+  return sum;
+}
+
+// error 수준 event의 최근 INCREASE_WINDOW_MS count 합입니다(서버가 받은 시각 기준, docs/guides/T34.md 결정 13).
+export function recentErrorEvents(app: AppState, now: number): number {
+  const since = now - INCREASE_WINDOW_MS;
+  let sum = 0;
+  for (const entry of app.errorEvents) {
+    if (entry.at >= since) {
+      sum += entry.count;
+    }
+  }
+  return sum;
+}
+
 // 증가량을 넣고 INCREASE_WINDOW_MS보다 오래된 것을 지웁니다.
 function recordIncrease(
   state: TrackedState,
@@ -494,6 +538,24 @@ function recordIncrease(
   const before = at - INCREASE_WINDOW_MS;
   let index = 0;
   while (index < list.length && (list[index] as CounterIncrease).at < before) {
+    index += 1;
+  }
+  if (index > 0) {
+    list.splice(0, index);
+  }
+}
+
+// error 수준 event의 count를 넣고 INCREASE_WINDOW_MS보다 오래된 것을 지웁니다.
+function recordErrorEvent(
+  state: TrackedState,
+  at: number,
+  count: number,
+): void {
+  const list = state.errorEvents;
+  list.push({ at, count });
+  const before = at - INCREASE_WINDOW_MS;
+  let index = 0;
+  while (index < list.length && (list[index] as ErrorEventCount).at < before) {
     index += 1;
   }
   if (index > 0) {

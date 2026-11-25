@@ -2,6 +2,7 @@ import type {
   ActionItem,
   DeploymentItem,
   PodItem,
+  PodOutlier,
   PodSeverity,
   PodStatus,
   PodStatusChange,
@@ -10,6 +11,8 @@ import { describe, expect, it } from "vitest";
 import {
   ISOLATED_GROUP_KEY,
   TIMELINE_WINDOW_MS,
+  attentionSeverity,
+  attentionTone,
   filterPods,
   groupPods,
   needsAttention,
@@ -213,6 +216,71 @@ describe("groupPods with isolated pods", () => {
         (summary) => summary.segments.length,
       ),
     ).toEqual([1]);
+  });
+});
+
+// 같은 Deployment의 다른 Pod보다 요청 p99가 높은 Pod입니다(docs/guides/T34.md).
+function outlierPod(
+  name: string,
+  status: PodStatus = "ok",
+  deployment: string | null = "web",
+): PodItem {
+  const outlier: PodOutlier = {
+    metric: "http.requests.duration_p99_ms",
+    value: 1003,
+    peerMedian: 31,
+    peers: 2,
+    since: 1,
+  };
+  return { ...pod(name, status, deployment), outliers: [outlier] };
+}
+
+describe("pods with outliers", () => {
+  it("다른 Pod보다 높은 값이 있으면 판단 강조가 없어도 주의", () => {
+    expect(attentionSeverity(outlierPod("o"))).toBe("warning");
+    expect(attentionTone(outlierPod("o"))).toBe("warning");
+    expect(needsAttention(outlierPod("o"))).toBe(true);
+    // 판단의 강조가 더 세면 그대로입니다.
+    expect(attentionSeverity(outlierPod("s", "stalled"))).toBe("critical");
+    expect(attentionTone(outlierPod("s", "stalled"))).toBe("critical");
+    // 빈 배열은 없는 것과 같습니다.
+    expect(needsAttention({ ...pod("a"), outliers: [] })).toBe(false);
+    expect(attentionTone(pod("a"))).toBe("ok");
+    // 격리된 Pod는 강조하지 않습니다.
+    expect(attentionSeverity({ ...isolatedPod("i", "ok"), outliers: [] })).toBe(
+      "none",
+    );
+  });
+
+  it("'지금 볼 것'에 주의로 들어가 위험 뒤, 같은 주의 안에서는 판단 표 순서", () => {
+    const groups = groupPods(
+      [
+        pod("a-ok"),
+        outlierPod("o-ok"),
+        pod("r-restarted", "restarted"),
+        pod("s-stalled", "stalled"),
+      ],
+      "all",
+    );
+    expect(groups.map((group) => group.title)).toEqual(["지금 볼 것", "정상"]);
+    expect(names(groups[0]!.pods)).toEqual([
+      "s-stalled",
+      "r-restarted",
+      "o-ok",
+    ]);
+    expect(names(groups[1]!.pods)).toEqual(["a-ok"]);
+    expect(names(groupPods([outlierPod("o-ok")], "problems")[0]!.pods)).toEqual(
+      ["o-ok"],
+    );
+  });
+
+  it("Deployment별 묶음의 점은 주의 색", () => {
+    const groups = groupPods(
+      [pod("w-ok"), outlierPod("w-slow")],
+      "deployments",
+    );
+    expect(groups.map((group) => group.tone)).toEqual(["warning"]);
+    expect(names(groups[0]!.pods)).toEqual(["w-slow", "w-ok"]);
   });
 });
 

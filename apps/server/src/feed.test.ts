@@ -55,6 +55,7 @@ function setup(namespaces: string[] = ["shop"]) {
     apps,
     cluster,
     namespaces,
+    metricsIntervalMs: 5000,
     now: () => clock.now,
   });
   const tick = () => feed.refresh(statuses.evaluate());
@@ -220,6 +221,7 @@ describe("PodFeed actions", () => {
       cluster,
       namespaces: ["shop", "pay"],
       actionNamespaces: ["shop"],
+      metricsIntervalMs: 5000,
     });
     expect(feed.list().actionNamespaces).toEqual(["shop"]);
     expect(feed.list("pay").actionNamespaces).toEqual(["shop"]);

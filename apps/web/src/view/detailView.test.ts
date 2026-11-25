@@ -298,6 +298,27 @@ describe("chooseFourthChart", () => {
     );
   });
 
+  it("prefers a metric that is higher than the other pods", () => {
+    // 다른 Pod보다 높은 값 가운데 고를 수 있는 것(그래프가 있는 것)을 순서대로 봅니다(docs/guides/T34.md 결정 16).
+    expect(
+      chooseFourthChart(values, undefined, [
+        "http.requests.duration_p99_ms",
+        "event:error",
+        "http.requests.errors_total",
+      ])?.name,
+    ).toBe("http.requests.errors_total");
+    // 개발자가 고른 것이 먼저입니다.
+    expect(
+      chooseFourthChart(values, "runtime.rss_bytes", [
+        "http.requests.errors_total",
+      ])?.name,
+    ).toBe("runtime.rss_bytes");
+    // 고를 수 있는 것이 없으면 원래 기본값입니다.
+    expect(chooseFourthChart(values, undefined, ["event:error"])?.name).toBe(
+      "app.queue.length",
+    );
+  });
+
   it("falls back to 5xx, then the first metric, then nothing", () => {
     const noApp = values.filter((entry) => !entry.name.startsWith("app."));
     expect(chooseFourthChart(noApp, undefined)).toEqual({

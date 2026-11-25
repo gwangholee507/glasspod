@@ -2,6 +2,7 @@
 // 서버의 reason은 코드(no-metrics, OOMKilled 등)이므로 화면 문장은 여기서 만듭니다. 목록은 명사형, 타임라인은 '~습니다'입니다.
 import type {
   PodItem,
+  PodOutlier,
   PodRestart,
   PodSeverity,
   PodStatus,
@@ -122,6 +123,86 @@ export function formatMegabytes(bytes: number | undefined): string {
   return `${integerFormat.format(Math.round(bytes / BYTES_PER_MB))} MB`;
 }
 
+// ── 지표 비교(docs/guides/T34.md 결정 11, 15~17) ──
+
+// 비교한 값의 이름입니다. 서버(apps/server/src/outliers.ts)와 같은 문자열입니다(웹은 protocol에서 타입만 가져옴).
+export const OUTLIER_METRIC = {
+  eventLoopP99Ms: "runtime.event_loop.lag_p99_ms",
+  heapUsedBytes: "runtime.heap.used_bytes",
+  httpP99Ms: "http.requests.duration_p99_ms",
+  http5xx: "http.requests.errors_total",
+  errorEvents: "event:error",
+} as const;
+
+const OUTLIER_LABEL: Record<string, string> = {
+  [OUTLIER_METRIC.eventLoopP99Ms]: "루프 p99",
+  [OUTLIER_METRIC.heapUsedBytes]: "힙",
+  [OUTLIER_METRIC.httpP99Ms]: "요청 p99",
+  [OUTLIER_METRIC.http5xx]: "5xx",
+  [OUTLIER_METRIC.errorEvents]: "예외",
+};
+
+// 값 이름입니다. 앱이 등록한 gauge(app.*)는 지표 이름 그대로입니다.
+export function outlierLabel(metric: string): string {
+  return OUTLIER_LABEL[metric] ?? metric;
+}
+
+const decimalFormat = new Intl.NumberFormat("ko-KR", {
+  maximumFractionDigits: 1,
+});
+
+// 목록 지표 칸과 같은 형식입니다. 5xx와 예외는 분당 개수, app.* gauge는 소수 한 자리까지입니다.
+export function formatOutlierValue(metric: string, value: number): string {
+  switch (metric) {
+    case OUTLIER_METRIC.eventLoopP99Ms:
+    case OUTLIER_METRIC.httpP99Ms:
+      return formatMs(value);
+    case OUTLIER_METRIC.heapUsedBytes:
+      return formatMegabytes(value);
+    case OUTLIER_METRIC.http5xx:
+    case OUTLIER_METRIC.errorEvents:
+      return `${integerFormat.format(Math.round(value))}/분`;
+    default:
+      return decimalFormat.format(value);
+  }
+}
+
+// '요청 p99 1,003 ms (다른 Pod 31 ms)'입니다. 상세는 '다른 Pod 중앙값'으로 씁니다.
+export function outlierPhrase(
+  outlier: PodOutlier,
+  peerWord = "다른 Pod",
+): string {
+  return `${outlierLabel(outlier.metric)} ${formatOutlierValue(outlier.metric, outlier.value)} (${peerWord} ${formatOutlierValue(outlier.metric, outlier.peerMedian)})`;
+}
+
+// 목록 항목의 한 줄입니다. 높은 값이 없으면 undefined입니다.
+export function outlierLine(
+  outliers: readonly PodOutlier[] | undefined,
+): string | undefined {
+  if (outliers === undefined || outliers.length === 0) {
+    return undefined;
+  }
+  return ["다른 Pod보다 높음", ...outliers.map((o) => outlierPhrase(o))].join(
+    " · ",
+  );
+}
+
+// 상세 머리줄의 문장입니다. 가장 먼저 높아진 때부터의 시간을 붙입니다. 높은 값이 없으면 undefined입니다.
+export function outlierSentence(
+  outliers: readonly PodOutlier[] | undefined,
+  now: number,
+): string | undefined {
+  if (outliers === undefined || outliers.length === 0) {
+    return undefined;
+  }
+  const peers = Math.max(...outliers.map((outlier) => outlier.peers));
+  const since = Math.min(...outliers.map((outlier) => outlier.since));
+  const phrases = outliers
+    .map((outlier) => outlierPhrase(outlier, "다른 Pod 중앙값"))
+    .join(", ");
+  return `같은 Deployment의 다른 Pod ${peers}개보다 높습니다: ${phrases} · ${formatDuration(now - since)}째`;
+}
+
 function restartPhrase(restart: PodRestart | undefined): string {
   if (restart?.reason === undefined) {
     return "새 instance로 다시 붙음";
@@ -177,7 +258,10 @@ export function podSentence(item: PodItem, now: number): string {
       case "no-sdk":
         return "쿠버네티스 정보만 봄";
       case "ok":
-        return "이상 신호 없음";
+        // 판단은 정상이어도 다른 Pod보다 높은 값이 있으면 '이상 신호 없음'이라 쓰지 않습니다(docs/guides/T34.md).
+        return (item.outliers?.length ?? 0) > 0
+          ? "연결과 쿠버네티스 상태는 정상"
+          : "이상 신호 없음";
     }
   })();
   // 우선순위가 높은 판단에 가려진 30분 안의 재시작도 알립니다(docs/guides/T13.md 결정 8).

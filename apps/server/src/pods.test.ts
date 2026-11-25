@@ -11,6 +11,7 @@ import {
   AppStates,
   INCREASE_WINDOW_MS,
   MAX_METRIC_NAMES_PER_POD,
+  recentErrorEvents,
 } from "./pods.js";
 import type { AppConnection } from "./pods.js";
 import { MemoryStore } from "./store/memory.js";
@@ -276,6 +277,42 @@ describe("AppStates", () => {
       { at: clock.now - 1_000, increase: 1 },
       { at: clock.now, increase: 2 },
     ]);
+  });
+
+  it("keeps error event counts of the last minute for exceptions per minute", () => {
+    const { apps, clock } = setup();
+    const first = connection("a");
+    apps.connect(first);
+    apps.receive(first, { ...event(1, 9_000), count: 40 });
+    // error가 아닌 event는 세지 않습니다.
+    apps.receive(first, { ...event(2, 9_500), level: "warn", count: 7 });
+    clock.now += 30_000;
+    apps.receive(first, { ...event(3, 39_000), count: 10 });
+    const state = apps.get(POD);
+    expect(state?.errorEvents).toEqual([
+      { at: 10_000, count: 40 },
+      { at: 40_000, count: 10 },
+    ]);
+    expect(
+      recentErrorEvents(state as NonNullable<typeof state>, clock.now),
+    ).toBe(50);
+
+    // 예전 연결의 event는 기록만 합니다. instance가 바뀌어도 1분 동안 남고, 넣을 때 60초 지난 것을 지웁니다.
+    const second = connection("b");
+    apps.connect(second);
+    clock.now += 31_000;
+    apps.receive(first, { ...event(4, 70_000), count: 99 });
+    apps.receive(second, { ...event(1, 70_000), count: 2 });
+    expect(apps.get(POD)?.errorEvents).toEqual([
+      { at: 40_000, count: 10 },
+      { at: 71_000, count: 2 },
+    ]);
+    expect(
+      recentErrorEvents(state as NonNullable<typeof state>, clock.now),
+    ).toBe(12);
+    expect(
+      recentErrorEvents(state as NonNullable<typeof state>, clock.now + 30_000),
+    ).toBe(2);
   });
 
   it("counts seq gaps as missing messages, also across reconnects", async () => {

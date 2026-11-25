@@ -1,6 +1,7 @@
 // 상세 머리줄입니다(docs/guides/T19.md 결정 4, 10): 상태 배지, Pod 이름, 조치 버튼, 판단 문장과 Pod 정보.
 // 버튼은 서랍을 엽니다(docs/guides/T21.md 결정 18). 격리되지 않은 Pod는 '트래픽에서 빼기'와 '재시작',
 // 트래픽에서 뺀 Pod는 '격리됨' 배지와 '삭제' 하나입니다(docs/guides/T23.md 결정 17).
+// 같은 Deployment의 다른 Pod보다 높은 값이 있으면 머리줄 아래 주의 색 상자로 알립니다(docs/guides/T34.md 결정 16).
 import type { PodItem, PodRef } from "@glasspod/protocol";
 import type { ReactNode } from "react";
 import { Link } from "react-router";
@@ -11,7 +12,11 @@ import { IsolatedBadge, StatusBadge } from "../ui/StatusBadge.js";
 import type { PodActionKind } from "../view/actionText.js";
 import { isIsolated } from "../view/podView.js";
 import { podFacts } from "../view/detailView.js";
-import { formatDuration, podSentence } from "../view/podText.js";
+import {
+  formatDuration,
+  outlierSentence,
+  podSentence,
+} from "../view/podText.js";
 
 export function DetailHeader({
   pod,
@@ -35,6 +40,7 @@ export function DetailHeader({
     item === undefined
       ? []
       : [podSentence(item, now), ...podFacts(item, now, formatDuration)];
+  const outliers = outlierSentence(item?.outliers, now);
   return (
     <header className="space-y-2">
       <Link
@@ -89,6 +95,14 @@ export function DetailHeader({
           <span key={index}> · {fact}</span>
         ))}
       </p>
+      {outliers !== undefined && (
+        <p
+          role="status"
+          className="rounded-lg border border-warning-line bg-warning-wash px-3 py-2 text-[13px] text-warning-ink"
+        >
+          {outliers}
+        </p>
+      )}
     </header>
   );
 }

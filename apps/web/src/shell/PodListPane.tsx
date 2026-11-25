@@ -1,6 +1,12 @@
 // 가운데 Pod 목록입니다: 찾기, 탭, 묶음, 항목(docs/guides/T18.md 결정 7~11, 14~16, 19, 20).
 // 트래픽에서 뺀 Pod는 맨 아래 '격리됨' 묶음에 두고 강조 색을 칠하지 않습니다(docs/guides/T23.md 결정 19).
-import type { PodItem, PodListBody, PodRef } from "@glasspod/protocol";
+// 같은 Deployment의 다른 Pod보다 높은 값은 지표 칸을 주의 색으로 칠하고 한 줄로 알립니다(docs/guides/T34.md 결정 15).
+import type {
+  PodItem,
+  PodListBody,
+  PodOutlier,
+  PodRef,
+} from "@glasspod/protocol";
 import { useState } from "react";
 import { Link } from "react-router";
 import type { PodStreamStatus } from "../api/podStream.js";
@@ -13,15 +19,19 @@ import {
   TONE_DOT,
 } from "../ui/StatusBadge.js";
 import {
+  OUTLIER_METRIC,
   formatDuration,
   formatMegabytes,
   formatMs,
+  formatOutlierValue,
+  outlierLine,
   podSentence,
-  statusTone,
   timeLabel,
 } from "../view/podText.js";
 import {
   ISOLATED_GROUP_KEY,
+  attentionSeverity,
+  attentionTone,
   filterPods,
   groupPods,
   isIsolated,
@@ -222,12 +232,15 @@ function PodCard({
   selected: boolean;
   showNamespace: boolean;
 }) {
-  const tone = statusTone(item.status);
   const { metrics } = item;
   const errors = metrics.http5xxPerMinute;
-  // 일부러 뺀 Pod는 위험 판단이어도 강조하지 않습니다.
+  // 일부러 뺀 Pod는 위험 판단이어도 강조하지 않습니다. 다른 Pod보다 높은 값은 주의입니다(T34).
   const isolated = isIsolated(item);
-  const highlight = isolated ? "none" : item.severity;
+  const highlight = attentionSeverity(item);
+  const outliers = item.outliers ?? [];
+  const outlierOf = (metric: string): PodOutlier | undefined =>
+    outliers.find((outlier) => outlier.metric === metric);
+  const line = outlierLine(outliers);
   return (
     <Link
       to={podLink(item.pod, namespace)}
@@ -242,7 +255,7 @@ function PodCard({
     >
       {highlight !== "none" && (
         <span
-          className={`absolute inset-y-0 left-0 w-1 ${TONE_BAR[tone]}`}
+          className={`absolute inset-y-0 left-0 w-1 ${TONE_BAR[attentionTone(item)]}`}
           aria-hidden="true"
         />
       )}
@@ -267,9 +280,16 @@ function PodCard({
       <p className="mt-1 text-[13px] text-slate-600">
         {podSentence(item, now)}
       </p>
+      {line !== undefined && (
+        <p className="mt-1 text-[13px] font-medium text-warning-ink">{line}</p>
+      )}
       {item.sdk !== undefined && (
         <dl className="mt-2.5 grid grid-cols-3 gap-2">
-          <Metric label="루프 p99" value={formatMs(metrics.eventLoopP99Ms)} />
+          <Metric
+            label="루프 p99"
+            value={formatMs(metrics.eventLoopP99Ms)}
+            outlier={outlierOf(OUTLIER_METRIC.eventLoopP99Ms)}
+          />
           <Metric
             label="힙"
             value={formatMegabytes(metrics.heapUsedBytes)}
@@ -278,30 +298,68 @@ function PodCard({
                 ? undefined
                 : `한도 ${formatMegabytes(metrics.heapLimitBytes)}`
             }
+            outlier={outlierOf(OUTLIER_METRIC.heapUsedBytes)}
           />
-          <Metric label="요청 p99" value={formatMs(metrics.httpP99Ms)} />
+          <Metric
+            label="요청 p99"
+            value={formatMs(metrics.httpP99Ms)}
+            outlier={outlierOf(OUTLIER_METRIC.httpP99Ms)}
+          />
         </dl>
       )}
     </Link>
   );
 }
 
+// 다른 Pod보다 높은 값(outlier)이면 주의 색으로 칠하고, 마우스를 올리면 다른 Pod의 중앙값을 보입니다.
 function Metric({
   label,
   value,
   title,
+  outlier,
 }: {
   label: string;
   value: string;
   title?: string | undefined;
+  outlier?: PodOutlier | undefined;
 }) {
+  const peers =
+    outlier === undefined
+      ? undefined
+      : `다른 Pod ${formatOutlierValue(outlier.metric, outlier.peerMedian)}보다 높음`;
   return (
     <div
-      title={title}
-      className="rounded-md border border-line bg-white px-2 py-1.5"
+      title={
+        [title, peers].filter((part) => part !== undefined).join(" · ") ||
+        undefined
+      }
+      className={
+        outlier === undefined
+          ? "rounded-md border border-line bg-white px-2 py-1.5"
+          : "rounded-md border border-warning-line bg-warning-wash px-2 py-1.5"
+      }
     >
-      <dt className="text-[11px] text-slate-500">{label}</dt>
-      <dd className="font-mono text-xs text-slate-800">{value}</dd>
+      <dt
+        className={
+          outlier === undefined
+            ? "text-[11px] text-slate-500"
+            : "text-[11px] text-warning-ink"
+        }
+      >
+        {label}
+        {outlier !== undefined && (
+          <span className="sr-only"> (다른 Pod보다 높음)</span>
+        )}
+      </dt>
+      <dd
+        className={
+          outlier === undefined
+            ? "font-mono text-xs text-slate-800"
+            : "font-mono text-xs font-semibold text-warning-ink"
+        }
+      >
+        {value}
+      </dd>
     </div>
   );
 }

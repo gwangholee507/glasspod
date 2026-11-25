@@ -51,6 +51,7 @@ function app(fields: Partial<AppState> = {}): AppState {
     missed: 0,
     values: new Map(),
     increases: new Map(),
+    errorEvents: [],
     ...fields,
   };
 }
