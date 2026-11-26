@@ -338,6 +338,13 @@ describe("changeSentence", () => {
       "다시 정상입니다.",
     );
     expect(changeSentence(change({}))).toBe("이상 신호가 없습니다.");
+    // 새 Pod가 처음 정상이 됨(docs/guides/T26.md)
+    expect(changeSentence(change({ previous: "starting" }))).toBe(
+      "이상 신호가 없습니다.",
+    );
+    expect(changeSentence(change({ previous: "no-sdk" }))).toBe(
+      "이상 신호가 없습니다.",
+    );
     expect(
       changeSentence(change({ status: "disconnected", severity: "critical" })),
     ).toBe("SDK 연결이 끊겼습니다.");

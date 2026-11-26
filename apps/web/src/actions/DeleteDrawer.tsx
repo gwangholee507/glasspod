@@ -72,7 +72,7 @@ export function DeleteDrawer({
       steps={[
         "Pod를 지웁니다. 앱은 종료 신호(SIGTERM)를 받고 유예 시간 안에 끝납니다.",
         "격리된 Pod라 다시 만들어지지 않습니다.",
-        "지운 Pod의 기록은 이 화면에 30분 남습니다.",
+        "지운 Pod는 Pod 목록의 '종료됨'에 30분 남아 기록을 볼 수 있습니다.",
       ]}
       warnings={["삭제는 되돌릴 수 없습니다."]}
       notice="원인을 더 보려면 지우기 전에 snapshot을 받아 둡니다."

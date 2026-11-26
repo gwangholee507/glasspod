@@ -317,6 +317,14 @@ describe("chooseFourthChart", () => {
     expect(chooseFourthChart(values, undefined, ["event:error"])?.name).toBe(
       "app.queue.length",
     );
+    // 높은 값에 app.* gauge가 있으면 서버가 보낸 순서와 상관없이 먼저입니다(docs/guides/T26.md).
+    expect(
+      chooseFourthChart(values, undefined, [
+        "http.requests.errors_total",
+        "event:error",
+        "app.queue.length",
+      ])?.name,
+    ).toBe("app.queue.length");
   });
 
   it("falls back to 5xx, then the first metric, then nothing", () => {

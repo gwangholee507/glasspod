@@ -479,7 +479,7 @@ describe("scale-deployment", () => {
     expect(down.steps).toEqual([
       "Deployment orders의 replica 수를 3개에서 1개로 바꿉니다.",
       "ReplicaSet이 Pod 2개를 지웁니다. 준비 안 된 Pod와 늦게 만든 Pod를 먼저 고릅니다.",
-      "지운 Pod의 기록은 이 화면에 30분 남습니다.",
+      "지운 Pod는 Pod 목록의 '종료됨'에 30분 남아 기록을 볼 수 있습니다.",
     ]);
 
     const zero = scalePlan(deployment, [], 0);

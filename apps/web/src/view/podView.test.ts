@@ -20,6 +20,7 @@ import {
   isNamespaceName,
   mergeStatusChanges,
   summarizeDeployments,
+  isDeleted,
 } from "./podView.js";
 
 const SEVERITY: Record<PodStatus, PodSeverity> = {
@@ -351,6 +352,32 @@ describe("summarizeDeployments", () => {
     expect(summaries[0]!.counts).toEqual([
       { label: "종료됨", tone: "neutral", count: 1 },
     ]);
+  });
+
+  it("지워진 Pod는 빼고 지우는 중인 Pod는 셈(T26 결정 4)", () => {
+    const deleted = (name: string): PodItem => ({
+      ...pod(name, "terminated", "web"),
+      reason: "deleted",
+    });
+    const terminating: PodItem = {
+      ...pod("w-old", "terminated", "web"),
+      reason: "terminating",
+    };
+    const summaries = summarizeDeployments(deployments, [
+      pod("w1", "ok", "web"),
+      pod("w2", "ok", "web"),
+      terminating,
+      deleted("w-gone"),
+      deleted("g1"),
+    ]);
+    const web = summaries.find((summary) => summary.name === "web")!;
+    expect(web.segments).toEqual(["ok", "ok", "neutral"]);
+    expect(web.counts).toEqual([
+      { label: "정상", tone: "ok", count: 2 },
+      { label: "종료됨", tone: "neutral", count: 1 },
+    ]);
+    expect(isDeleted(deleted("g1"))).toBe(true);
+    expect(isDeleted(terminating)).toBe(false);
   });
 });
 

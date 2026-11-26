@@ -23,7 +23,7 @@ Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 �
 
 쿠버네티스는 컨테이너를 알고, Glasspod는 앱을 압니다.
 
-> 개발 중입니다. 로컬 클러스터(Docker Desktop)에서 관찰부터 조치까지 동작하고, 첫 마일스톤인 [대표 시나리오](docs/design.md#6-대표-시나리오-pod-하나가-느려질-때) 점검을 앞두고 있습니다.
+> 개발 중입니다. 첫 마일스톤으로 [대표 시나리오](docs/design.md#6-대표-시나리오-pod-하나가-느려질-때)(Pod 하나가 느려짐 → 다른 Pod와 비교해 강조 → 원인 확인 → 트래픽에서 빼기 → 삭제)를 로컬 클러스터(Docker Desktop)에서 처음부터 끝까지 점검했습니다. 다음은 자동 규칙입니다.
 
 ## 왜 필요한가
 
@@ -90,7 +90,7 @@ npm run dev:web
 ```bash
 kubectl config current-context        # docker-desktop인지 확인
 npm run demo:image && npm run server:image
-kubectl apply -f deploy/demo/         # 데모 앱 Pod 3개 + Service + 부하 Pod
+kubectl apply -f deploy/demo/         # 데모 앱 Pod 3개 + Service + 부하 Pod(초당 20건)
 kubectl apply -f deploy/server/       # 서버 + ServiceAccount + Role
 kubectl -n glasspod port-forward service/glasspod-server 8080:8080
 npm run dev:web                       # 다른 터미널에서
@@ -198,7 +198,7 @@ npm run generate      # 프로토콜 스키마에서 타입 다시 만들기
 - [x] 수동 조치: Pod 재시작, 트래픽에서 빼기(격리), 스케일 조정
 - [x] 데모 앱과 로컬 클러스터 배포
 - [ ] 서버가 웹 화면을 함께 제공
-- [ ] 첫 마일스톤: 대표 시나리오를 로컬 클러스터에서 처음부터 끝까지 점검
+- [x] 첫 마일스톤: 대표 시나리오를 로컬 클러스터에서 처음부터 끝까지 점검
 - [ ] 자동 규칙(알림만 → 자동), 전체 재시작과 롤백, Spring Boot SDK, PostgreSQL 저장소
 
 지표 장기 저장과 추세 분석(Prometheus의 영역), 로그 수집, 앱 상태를 원격으로 바꾸는 제어는 하지 않습니다.

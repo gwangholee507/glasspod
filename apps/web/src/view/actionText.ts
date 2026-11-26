@@ -545,7 +545,7 @@ export function scalePlan(
         to === 0
           ? `ReplicaSet이 Pod ${from}개를 모두 지웁니다.`
           : `ReplicaSet이 Pod ${removed}개를 지웁니다. 준비 안 된 Pod와 늦게 만든 Pod를 먼저 고릅니다.`,
-        "지운 Pod의 기록은 이 화면에 30분 남습니다.",
+        "지운 Pod는 Pod 목록의 '종료됨'에 30분 남아 기록을 볼 수 있습니다.",
       );
     }
     if (isolated > 0) {

@@ -73,7 +73,7 @@ export function RestartDrawer({
     ...(impact?.replicaSet === undefined
       ? []
       : [`ReplicaSet ${impact.replicaSet}이 대신할 새 Pod를 만듭니다.`]),
-    "지운 Pod의 기록은 이 화면에 30분 남습니다.",
+    "지운 Pod는 Pod 목록의 '종료됨'에 30분 남아 기록을 볼 수 있습니다.",
   ];
 
   return (

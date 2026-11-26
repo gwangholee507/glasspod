@@ -27,8 +27,10 @@ spec:
             # 데모 앱 Service입니다. 요청마다 새 연결이라 Service 뒤의 Pod에 고르게 나뉩니다(T10 결정 19).
             - name: LOAD_TARGET
               value: http://demo-app:3000
+            # Pod 3개에 나뉘면 Pod마다 주문(POST)이 초당 약 3.3건입니다. 작업자는 느려짐 때 초당 2건만
+            # 처리하므로 큐가 쌓입니다(design.md 6장 1단계, docs/guides/T26.md 결정 1). 평소에는 여유가 있습니다.
             - name: LOAD_RPS
-              value: "10"
+              value: "20"
           resources:
             requests:
               cpu: 50m

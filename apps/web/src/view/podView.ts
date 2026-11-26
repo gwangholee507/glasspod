@@ -29,6 +29,12 @@ export function isIsolated(item: PodItem | undefined): boolean {
   return item?.kube?.isolation !== undefined;
 }
 
+// 쿠버네티스에서 이미 지워진 Pod입니다. 서버가 30분 동안 '종료됨'(근거 deleted)으로 남깁니다(T11, T13).
+// 지우는 중(근거 terminating)인 Pod는 아직 쿠버네티스에 있으므로 들지 않습니다.
+export function isDeleted(item: PodItem): boolean {
+  return item.status === "terminated" && item.reason === "deleted";
+}
+
 // 같은 Deployment의 다른 Pod보다 높은 값이 있는 Pod입니다(docs/guides/T34.md).
 export function hasOutliers(item: PodItem): boolean {
   return (item.outliers?.length ?? 0) > 0;
@@ -291,7 +297,10 @@ export function summarizeDeployments(
     });
   }
   // 격리된 Pod는 Deployment가 관리하지 않으므로 요약에서 뺍니다(docs/guides/T23.md 결정 13).
-  for (const item of pods.filter((pod) => !isIsolated(pod))) {
+  // 지워진 Pod도 빼서 막대가 지금 있는 Pod 수와 맞게 합니다(docs/guides/T26.md 결정 4).
+  for (const item of pods.filter(
+    (pod) => !isIsolated(pod) && !isDeleted(pod),
+  )) {
     const key = keyOf(item.pod.namespace, item.deployment);
     const summary = summaries.get(key) ?? {
       namespace: item.pod.namespace,

@@ -306,7 +306,10 @@ export function changeSentence(change: PodStatusChange): string {
     case "no-sdk":
       return "SDK가 붙지 않은 Pod입니다.";
     case "ok":
-      return change.previous === undefined
+      // 새 Pod가 처음 정상이 된 것(시작 중, SDK가 아직 붙지 않음)은 '다시'가 아닙니다(docs/guides/T26.md).
+      return change.previous === undefined ||
+        change.previous === "starting" ||
+        change.previous === "no-sdk"
         ? "이상 신호가 없습니다."
         : "다시 정상입니다.";
   }
