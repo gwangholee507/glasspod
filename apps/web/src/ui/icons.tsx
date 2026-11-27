@@ -56,6 +56,15 @@ export function HistoryIcon({ className }: IconProps) {
   );
 }
 
+// 메뉴의 자동 규칙(조건 → 조치)
+export function RuleIcon({ className }: IconProps) {
+  return (
+    <Icon className={className}>
+      <path d="M4 6h8M4 12h5M4 18h8M15 9l5 3-5 3M9 12h11" />
+    </Icon>
+  );
+}
+
 export function SearchIcon({ className }: IconProps) {
   return (
     <Icon className={className}>

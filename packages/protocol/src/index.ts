@@ -6,6 +6,8 @@ export const PROTOCOL_VERSION = 1;
 export type * from "./generated/sdk-message.js";
 export type * from "./generated/server-message.js";
 export type * from "./generated/snapshot.js";
+// 자동 규칙 파일의 타입입니다(docs/guides/T28.md). 서버 설정이지만 스키마가 기준인 것은 같습니다.
+export type * from "./generated/rules.js";
 
 // 서버 HTTP API의 본문 타입입니다(손으로 씀). 서버와 웹 화면이 함께 씁니다.
 export type * from "./http.js";
@@ -13,6 +15,7 @@ export type * from "./http.js";
 export {
   parseSdkMessage,
   parseServerMessage,
+  validateRulesFile,
   validateSnapshotData,
 } from "./validate.js";
 export type { ParseResult } from "./validate.js";

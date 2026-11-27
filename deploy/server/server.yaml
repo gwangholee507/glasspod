@@ -2,6 +2,7 @@
 # 이미지는 루트에서 npm run server:image로 만든 glasspod-server:dev를 그대로 씁니다(D3, 레지스트리에 올리지 않음).
 # 이미지를 다시 만들면 kubectl -n glasspod rollout restart deployment/glasspod-server로 새 Pod를 띄웁니다.
 # 노트북에서 API를 부를 때는 kubectl -n glasspod port-forward service/glasspod-server 8080:8080입니다(D4).
+# 자동 규칙은 rules.yaml의 ConfigMap glasspod-rules를 볼륨으로 붙여 읽습니다(docs/guides/T28.md 결정 1).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -54,6 +55,15 @@ spec:
             # 지우면 조치가 모두 꺼집니다(docs/guides/T21.md 결정 2).
             - name: GLASSPOD_ACTION_NAMESPACES
               value: glasspod-demo
+            # 자동 규칙 파일입니다. 아래 rules 볼륨의 파일이고, 서버가 5초마다 다시 읽습니다(docs/guides/T28.md 결정 1).
+            # 지우면 규칙이 꺼집니다.
+            - name: GLASSPOD_RULES_FILE
+              value: /etc/glasspod/rules/rules.yaml
+          volumeMounts:
+            # 폴더째 붙입니다. subPath로 파일 하나만 붙이면 ConfigMap을 바꿔도 파일이 바뀌지 않습니다.
+            - name: rules
+              mountPath: /etc/glasspod/rules
+              readOnly: true
           # readiness만 둡니다. 서버는 기록을 메모리에 들고 있어 재시작하면 사라지므로 쿠버네티스가 재시작하지 않게 합니다
           # (2026-11-14 사용자 결정). 준비되기 전에는 Service가 SDK 연결을 보내지 않습니다.
           # 서버는 포트를 열기까지 약 1초 걸립니다(client-node 불러오기). 그 전에 묻지 않게 2초 기다려
@@ -79,6 +89,12 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+      volumes:
+        # ConfigMap glasspod-rules(rules.yaml)입니다. 없어도 서버는 뜨고 규칙 없이 시작합니다(optional).
+        - name: rules
+          configMap:
+            name: glasspod-rules
+            optional: true
 ---
 apiVersion: v1
 kind: Service

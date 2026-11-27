@@ -1,8 +1,14 @@
-import type { ActionItem, HelloMessage, PodRef } from "@glasspod/protocol";
+import type {
+  ActionItem,
+  HelloMessage,
+  PodRef,
+  RuleFiring,
+  RulesView,
+} from "@glasspod/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClusterState } from "./cluster.js";
 import type { PodSummary } from "./cluster.js";
-import { PodFeed, filterChanges } from "./feed.js";
+import { PodFeed, filterChanges, rulesIn } from "./feed.js";
 import { AppStates } from "./pods.js";
 import type { AppConnection } from "./pods.js";
 import { StatusMonitor } from "./status-monitor.js";
@@ -228,6 +234,70 @@ describe("PodFeed actions", () => {
   });
 });
 
+describe("PodFeed rules", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function ruleView(matching: number): RulesView {
+    return {
+      file: { path: "/rules.yaml", loadedAt: 1 },
+      rules: [
+        {
+          name: "stalled-restart",
+          mode: "notify",
+          target: { namespace: "shop", deployment: "orders" },
+          when: [{ signal: "status", statuses: ["stalled"], forMs: 30_000 }],
+          action: { kind: "restart" },
+          cooldownMs: 600_000,
+          state: {
+            matching: Array.from({ length: matching }, (_, index) => ({
+              pod: { namespace: "shop", name: `orders-${index}` },
+              since: 1,
+              readyAt: 2,
+            })),
+            firedLastHour: 0,
+          },
+          notes: [],
+        },
+      ],
+    };
+  }
+
+  it("sends the rule view only when it changed, and firings once", () => {
+    const { statuses, apps, cluster } = setup();
+    const view = { current: ruleView(0) };
+    const feed = new PodFeed({
+      statuses,
+      apps,
+      cluster,
+      namespaces: ["shop"],
+      metricsIntervalMs: 5000,
+      rules: { view: () => view.current },
+    });
+    expect(feed.refresh().rules).toEqual(ruleView(0));
+    expect(feed.refresh().rules).toBeUndefined();
+    view.current = ruleView(1);
+    const firing = { id: "f1", target: { namespace: "shop" } } as RuleFiring;
+    feed.queueRuleFiring(firing);
+    const changes = feed.refresh();
+    expect(changes.rules).toEqual(ruleView(1));
+    expect(changes.ruleFirings).toEqual([firing]);
+    expect(feed.refresh().ruleFirings).toEqual([]);
+  });
+
+  it("keeps only the rules of a namespace and the whole file state", () => {
+    const view = ruleView(0);
+    expect(rulesIn(view, "pay")).toEqual({ file: view.file, rules: [] });
+    expect(rulesIn(view, "shop")).toEqual(view);
+    expect(rulesIn(view, undefined)).toBe(view);
+  });
+});
+
 describe("filterChanges", () => {
   const base = {
     serverTime: 1,
@@ -237,6 +307,7 @@ describe("filterChanges", () => {
     removedDeployments: [],
     statusChanges: [],
     actions: [],
+    ruleFirings: [],
   };
 
   it("keeps only the namespace and drops empty changes", () => {
@@ -264,6 +335,23 @@ describe("filterChanges", () => {
       filterChanges(changes, "shop")?.actions.map((item) => item.id),
     ).toEqual(["a-shop-a"]);
     expect(filterChanges(changes, "else")).toBeUndefined();
+  });
+
+  it("keeps the rule firings and rules of the namespace", () => {
+    const firing = (namespace: string) =>
+      ({ id: namespace, target: { namespace } }) as RuleFiring;
+    const changes = {
+      ...base,
+      ruleFirings: [firing("shop"), firing("pay")],
+      rules: { file: {}, rules: [] },
+    };
+    expect(
+      filterChanges(changes, "shop")?.ruleFirings.map((item) => item.id),
+    ).toEqual(["shop"]);
+    // 규칙 보기가 바뀌었으면 그 namespace에 규칙이 없어도 파일 상태를 보냅니다.
+    expect(
+      filterChanges({ ...changes, ruleFirings: [] }, "else")?.rules,
+    ).toEqual({ file: {}, rules: [] });
   });
 
   it("always passes a new namespace list", () => {

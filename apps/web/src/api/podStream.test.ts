@@ -1,4 +1,10 @@
-import type { ActionItem, PodItem, PodListChanges } from "@glasspod/protocol";
+import type {
+  ActionItem,
+  PodItem,
+  PodListChanges,
+  RuleFiring,
+  RulesView,
+} from "@glasspod/protocol";
 import { describe, expect, it } from "vitest";
 import {
   MAX_STREAM_ACTIONS,
@@ -28,6 +34,7 @@ function changes(fields: Partial<PodListChanges>): PodListChanges {
     removedDeployments: [],
     statusChanges: [],
     actions: [],
+    ruleFirings: [],
     ...fields,
   };
 }
@@ -51,6 +58,7 @@ const STATE: PodStreamState = {
   },
   statusChanges: [],
   actions: [],
+  ruleFirings: [],
 };
 
 function action(id: string): ActionItem {
@@ -138,6 +146,21 @@ describe("applyPodChanges", () => {
     expect(last.actions[0]?.id).toBe("old-1");
     expect(last.actions.at(-1)?.id).toBe("new");
   });
+
+  it("keeps rule firings and the latest rule view with its server time", () => {
+    const firing = { id: "f1" } as RuleFiring;
+    const view: RulesView = { file: { loadedAt: 1 }, rules: [] };
+    const next = applyPodChanges(
+      STATE,
+      changes({ ruleFirings: [firing], rules: view }),
+    );
+    expect(next.ruleFirings).toEqual([firing]);
+    expect(next.rules).toEqual({ serverTime: 2, view });
+    // 규칙 보기가 오지 않은 changes는 앞의 것을 그대로 둡니다.
+    const later = applyPodChanges(next, { ...changes({}), serverTime: 3 });
+    expect(later.rules).toBe(next.rules);
+    expect(later.ruleFirings).toBe(next.ruleFirings);
+  });
 });
 
 describe("applyPodList", () => {
@@ -147,6 +170,7 @@ describe("applyPodList", () => {
       list,
       statusChanges: [],
       actions: [],
+      ruleFirings: [],
     });
   });
 });

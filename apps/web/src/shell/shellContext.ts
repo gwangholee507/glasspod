@@ -41,6 +41,13 @@ export function isolatedLink(namespace: string | undefined) {
   return { pathname: ISOLATED_PATH, search: namespaceSearch(namespace) };
 }
 
+// 자동 규칙 화면 주소입니다(docs/guides/T28.md 결정 2).
+export const RULES_PATH = "/rules";
+
+export function rulesLink(namespace: string | undefined) {
+  return { pathname: RULES_PATH, search: namespaceSearch(namespace) };
+}
+
 // 상세 주소입니다. 주소의 한 칸이 되게 인코딩합니다.
 export function podLink(pod: PodRef, namespace: string | undefined) {
   return {

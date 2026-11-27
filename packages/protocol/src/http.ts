@@ -99,6 +99,9 @@ export interface PodIsolation {
   deployment?: string;
   replicaSet?: string;
   actor?: ActionActor;
+  // 격리할 때 같은 Deployment의 다른 Pod보다 높던 값의 이름입니다(PodOutlier.metric, docs/guides/T28.md 결정 21).
+  // 없었으면 필드가 없습니다.
+  outliers?: string[];
 }
 
 // 쿠버네티스 Pod 요약입니다(docs/guides/T12.md '요약'). 쿠버네티스에 없는 Pod는 항목에 없습니다.
@@ -297,6 +300,8 @@ export interface PodDetailBody {
   kubeEvents: PodKubeEvent[];
   // 이 Pod(namespace·이름)에 한 조치 전부입니다. 30분이 아니라 서버가 남긴 만큼이고, 요청한 순서입니다(T21 결정 11).
   actions: ActionItem[];
+  // 이 Pod가 조건에 맞아 발동한 자동 규칙 기록입니다. 서버가 남긴 만큼이고 발동한 순서입니다(T28 결정 17, 18).
+  ruleFirings: RuleFiring[];
 }
 
 // ── 그래프용 시계열(docs/guides/T19.md 결정 5, 6) ──
@@ -341,6 +346,10 @@ export interface PodListChanges {
   statusChanges: PodStatusChange[];
   // 앞 주기 뒤에 끝난 조치입니다(docs/guides/T21.md 결정 12). 요청한 순서입니다.
   actions: ActionItem[];
+  // 앞 주기 뒤에 남긴 자동 규칙 기록입니다(docs/guides/T28.md 결정 18). 남긴 순서입니다.
+  ruleFirings: RuleFiring[];
+  // 규칙 파일 상태나 규칙 보기(지금 상태 포함)가 바뀌었을 때만 통째로 있습니다(T28 결정 18).
+  rules?: RulesView;
   // namespace 목록이 바뀌었을 때만 있습니다.
   namespaces?: string[];
 }
@@ -462,4 +471,146 @@ export interface ActionBody {
 export interface ActionsBody {
   serverTime: number;
   actions: ActionItem[];
+}
+
+// ── 자동 규칙(docs/guides/T28.md) ──
+// 규칙은 ConfigMap의 YAML(packages/protocol/schema/rules.schema.json)이고, 아래는 서버가 읽어 바꾼 모양입니다.
+// 시간은 ms입니다. 화면은 보여 주기만 하고 고치지 않습니다(D5).
+
+// off: 보지 않음, notify: 알림만(실행했을 것을 기록), auto: 자동 실행
+export type RuleMode = "off" | "notify" | "auto";
+
+// 조건 하나입니다(결정 4, 11). metric의 threshold와 compare는 YAML의 above·below입니다.
+export type RuleCondition =
+  | { signal: "status"; statuses: PodStatus[]; forMs: number }
+  | { signal: "outlier"; metric: string; forMs: number }
+  | {
+      signal: "metric";
+      metric: string;
+      compare: "above" | "below";
+      threshold: number;
+      forMs: number;
+    };
+
+// 조치 하나입니다(결정 6). scale은 지금 원하는 수에 by를 더하고 min~max로 자릅니다.
+export type RuleAction =
+  | { kind: "restart" }
+  | { kind: "isolate" }
+  | { kind: "scale"; by: number; min?: number; max?: number };
+
+// 규칙 파일에서 읽은 규칙입니다. 파일의 순서입니다.
+export interface RuleDefinition {
+  name: string;
+  mode: RuleMode;
+  description?: string;
+  target: { namespace: string; deployment: string };
+  when: RuleCondition[];
+  action: RuleAction;
+  cooldownMs: number;
+  maxPerHour?: number;
+}
+
+// 조건이 지금 모두 맞는 Pod입니다(결정 12). since는 모든 조건이 맞기 시작한 시각(가장 늦게 맞은 조건),
+// readyAt은 모든 조건의 지속 시간을 채우는 시각입니다. 지나면 발동할 수 있습니다.
+export interface RuleMatch {
+  pod: PodRef;
+  since: number;
+  readyAt: number;
+}
+
+// 규칙의 지금 상태입니다(결정 13, 18).
+export interface RuleState {
+  // 조건이 지금 모두 맞는 Pod입니다. readyAt 순서입니다.
+  matching: RuleMatch[];
+  // 마지막으로 발동한 시각(알림만·실행·건너뜀)입니다.
+  lastFiredAt?: number;
+  // 쉬는 중이면 끝나는 시각입니다.
+  coolingUntil?: number;
+  // 최근 1시간에 발동한(알림만과 실행) 횟수입니다. maxPerHour와 견줍니다.
+  firedLastHour: number;
+  // 자동 조치를 실행하는 중입니다.
+  running?: true;
+}
+
+// 규칙이 발동하지 못하거나 화면이 미리 알릴 것입니다(결정 19).
+// namespace-not-watched: GLASSPOD_NAMESPACES에 없음, actions-disabled: 자동인데 GLASSPOD_ACTION_NAMESPACES에 없음,
+// deployment-not-found: 쿠버네티스에 그 Deployment가 없음, hpa: 스케일 규칙인데 HPA가 붙어 있음(자동 스케일은 건너뜀)
+export type RuleNote =
+  "namespace-not-watched" | "actions-disabled" | "deployment-not-found" | "hpa";
+
+export interface RuleItem extends RuleDefinition {
+  state: RuleState;
+  notes: RuleNote[];
+}
+
+// 규칙 파일 상태입니다(결정 1, 9).
+export interface RulesFileState {
+  // GLASSPOD_RULES_FILE입니다. 없으면 규칙이 꺼져 있습니다.
+  path?: string;
+  // 지금 규칙을 받아들인 시각입니다. 한 번도 받아들이지 못했으면 없습니다(규칙 없음).
+  loadedAt?: number;
+  // 마지막으로 읽은 파일이 틀렸거나 읽지 못했을 때입니다. 그때도 지금 규칙(loadedAt의 것)을 그대로 씁니다.
+  error?: { at: number; detail: string };
+}
+
+export interface RulesView {
+  file: RulesFileState;
+  rules: RuleItem[];
+}
+
+// 발동의 결과입니다(결정 17). notified: 알림만(실행했을 것), executed: 자동으로 실행함(결과는 actionResult), skipped: 건너뜀
+export type RuleOutcome = "notified" | "executed" | "skipped";
+
+// 건너뛴 이유입니다(결정 3, 13~15).
+export type RuleSkipReason =
+  | "max-per-hour"
+  | "no-deployment"
+  | "isolated-limit"
+  | "too-few-healthy"
+  | "hpa"
+  | "at-limit";
+
+// 발동할 때 맞은 조건과 그때 값입니다. 조건은 그때 규칙의 것을 그대로 담습니다.
+export interface RuleConditionMatch {
+  condition: RuleCondition;
+  // 이 조건이 맞기 시작한 시각입니다.
+  since: number;
+  // status: 그때 판단, outlier: 이 Pod 값과 다른 Pod 중앙값, metric: 그때 값(counter·event:error는 분당)입니다.
+  status?: PodStatus;
+  value?: number;
+  peerMedian?: number;
+}
+
+// 규칙 기록 한 건입니다(결정 17). 서버 저장소도 이 모양 그대로 남깁니다.
+export interface RuleFiring {
+  // 서버가 만든 UUID입니다.
+  id: string;
+  rule: string;
+  mode: "notify" | "auto";
+  // 발동한 시각입니다. 자동 실행은 조치가 끝난 뒤 남지만 시각은 발동한 때입니다.
+  at: number;
+  // 하는(했을) 조치와 대상입니다. 대상 uid는 그때 ClusterState의 uid입니다.
+  action: "restart-pod" | "isolate-pod" | "scale-deployment";
+  target: ActionTarget;
+  // 조건이 맞은 Pod입니다. 스케일도 이 Pod 때문에 발동합니다.
+  pod: PodRef;
+  deployment: string;
+  conditions: RuleConditionMatch[];
+  outcome: RuleOutcome;
+  skipReason?: RuleSkipReason;
+  // too-few-healthy: 대상을 뺀 건강한 Pod 수와 필요한 수입니다.
+  healthy?: number;
+  needed?: number;
+  // 스케일: 그때 원하는 replica 수와 바꿀(바꿨을) 수입니다.
+  scale?: { from: number; to: number };
+  // executed: 조치 기록(ActionItem)의 id와 결과입니다.
+  actionId?: string;
+  actionResult?: ActionResult;
+  actionError?: ActionErrorCode;
+}
+
+// GET /api/rules 본문입니다. firings는 서버가 남긴 규칙 기록 전부(최근 1,000건), 발동한 순서입니다.
+export interface RulesBody extends RulesView {
+  serverTime: number;
+  firings: RuleFiring[];
 }

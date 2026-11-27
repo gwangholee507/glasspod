@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseSdkMessage,
   parseServerMessage,
+  validateRulesFile,
   validateSnapshotData,
 } from "./validate.js";
 import type { ParseResult } from "./validate.js";
@@ -290,5 +291,153 @@ describe("validateSnapshotData", () => {
     { name: "a value that is not an object", input: null, error: "data" },
   ])("rejects $name", ({ input, error }) => {
     expectError(validateSnapshotData(input), error);
+  });
+});
+
+// docs/guides/T28.md 결정 4~7의 규칙 파일입니다(deploy/server/rules.yaml의 데모 규칙과 같은 모양).
+const rulesFile = {
+  rules: [
+    {
+      name: "slow-pod-isolate",
+      mode: "notify",
+      description: "요청 p99가 다른 Pod보다 높으면 트래픽에서 뺍니다.",
+      target: { namespace: "glasspod-demo", deployment: "demo-app" },
+      when: [{ outlier: "http.requests.duration_p99_ms", for: "30s" }],
+      action: { isolate: {} },
+      cooldown: "10m",
+      maxPerHour: 2,
+    },
+    {
+      name: "stalled-restart",
+      target: { namespace: "glasspod-demo", deployment: "demo-app" },
+      when: [
+        { status: ["stalled", "disconnected"], for: "30s" },
+        { metric: "event:error", above: 5, for: "0s" },
+        { metric: "app.queue.length", below: 1, for: "1m" },
+      ],
+      action: { restart: {} },
+      cooldown: "10m",
+    },
+    {
+      name: "queue-scale",
+      mode: "off",
+      target: { namespace: "glasspod-demo", deployment: "demo-app" },
+      when: [{ metric: "app.queue.length", above: 50, for: "1m" }],
+      action: { scale: { by: 1, max: 5 } },
+      cooldown: "10m",
+    },
+  ],
+};
+
+function withRule(change: Record<string, unknown>): unknown {
+  return { rules: [{ ...rulesFile.rules[0], ...change }] };
+}
+
+describe("validateRulesFile", () => {
+  it("accepts the T28 example rules", () => {
+    expect(validateRulesFile(rulesFile).ok).toBe(true);
+  });
+
+  it("accepts an empty rule list", () => {
+    expect(validateRulesFile({ rules: [] }).ok).toBe(true);
+  });
+
+  it("names a misspelled field together with the missing one", () => {
+    const result = validateRulesFile(
+      withRule({ cooldown: undefined, cooldwon: "10m" }),
+    );
+    expect(result).toEqual({
+      ok: false,
+      error:
+        "rules/0 must have required property 'cooldown'; rules/0 has an unknown field \"cooldwon\"",
+    });
+  });
+
+  it("accepts scaling down with min", () => {
+    expect(
+      validateRulesFile(withRule({ action: { scale: { by: -1, min: 2 } } })).ok,
+    ).toBe(true);
+  });
+
+  it.each<Case>([
+    {
+      name: "a missing rules list",
+      input: {},
+      error: "file must have required property 'rules'",
+    },
+    {
+      name: "an unknown top-level field",
+      input: { ...rulesFile, rule: [] },
+      error: 'file has an unknown field "rule"',
+    },
+    {
+      name: "a misspelled rule field",
+      input: withRule({ cooldwon: "10m" }),
+      error: 'rules/0 has an unknown field "cooldwon"',
+    },
+    {
+      name: "an unknown mode",
+      input: withRule({ mode: "on" }),
+      error: "rules/0/mode must be one of: off, notify, auto",
+    },
+    {
+      name: "a rule name with capitals",
+      input: withRule({ name: "SlowPod" }),
+      error: "rules/0/name must match pattern",
+    },
+    {
+      name: "a duration without a unit",
+      input: withRule({ cooldown: "600" }),
+      error: "rules/0/cooldown must match pattern",
+    },
+    {
+      name: "no conditions",
+      input: withRule({ when: [] }),
+      error: "rules/0/when must NOT have fewer than 1 items",
+    },
+    {
+      name: "a condition without for",
+      input: withRule({ when: [{ status: ["stalled"] }] }),
+      error: "rules/0/when/0 must be one condition",
+    },
+    {
+      name: "a metric condition with both above and below",
+      input: withRule({
+        when: [{ metric: "app.queue.length", above: 1, below: 9, for: "1m" }],
+      }),
+      error: "rules/0/when/0 must be one condition",
+    },
+    {
+      name: "an unknown status",
+      input: withRule({ when: [{ status: ["slow"], for: "1m" }] }),
+      error: "rules/0/when/0/status/0 must be one of: terminated,",
+    },
+    {
+      name: "a metric name that is not an SDK name",
+      input: withRule({ when: [{ outlier: "latency", for: "1m" }] }),
+      error: "rules/0/when/0/outlier must match pattern",
+    },
+    {
+      name: "two actions",
+      input: withRule({ action: { restart: {}, isolate: {} } }),
+      error: "rules/0/action must be one action",
+    },
+    {
+      name: "scaling up without max",
+      input: withRule({ action: { scale: { by: 1 } } }),
+      error: "rules/0/action/scale must have required property 'max'",
+    },
+    {
+      name: "scaling by zero",
+      input: withRule({ action: { scale: { by: 0, max: 3 } } }),
+      error: "rules/0/action/scale/by must NOT be valid",
+    },
+    {
+      name: "a replica bound above 20",
+      input: withRule({ action: { scale: { by: 1, max: 21 } } }),
+      error: "rules/0/action/scale/max must be <= 20",
+    },
+  ])("rejects $name", ({ input, error }) => {
+    expectError(validateRulesFile(input), error);
   });
 });

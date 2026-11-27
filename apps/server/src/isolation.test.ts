@@ -21,6 +21,8 @@ describe("readIsolation", () => {
           "glasspod/isolated-deployment": "demo-app",
           "glasspod/isolated-replicaset": "demo-app-7c9",
           "glasspod/isolated-by": "rule:queue-too-long",
+          "glasspod/isolated-outliers":
+            '["http.requests.duration_p99_ms","event:error"]',
         },
       }),
     ).toEqual({
@@ -30,7 +32,19 @@ describe("readIsolation", () => {
       deployment: "demo-app",
       replicaSet: "demo-app-7c9",
       actor: { kind: "rule", name: "queue-too-long" },
+      outliers: ["http.requests.duration_p99_ms", "event:error"],
     });
+  });
+
+  it("ignores an outliers annotation that is not a list of names", () => {
+    for (const text of ["{", '"x"', "[]", "[1]"]) {
+      expect(
+        readIsolation({
+          labels: { "glasspod/isolated": "true" },
+          annotations: { "glasspod/isolated-outliers": text },
+        })?.outliers,
+      ).toBeUndefined();
+    }
   });
 
   it("is undefined without the marker label", () => {
@@ -205,5 +219,32 @@ describe("isolationPatch", () => {
         },
       },
     });
+  });
+
+  it("keeps the outlier names of the moment as a JSON list", () => {
+    const patch = isolationPatch({
+      resourceVersion: "77",
+      plan: { labels: { app: "demo-app" }, services: ["demo-app"] },
+      at: 0,
+      status: "ok",
+      actor: { kind: "rule", name: "slow-pod-isolate" },
+      outliers: ["http.requests.duration_p99_ms", "event:error"],
+    }) as { metadata: { annotations: Record<string, string> } };
+    expect(patch.metadata.annotations).toMatchObject({
+      "glasspod/isolated-by": "rule:slow-pod-isolate",
+      "glasspod/isolated-outliers":
+        '["http.requests.duration_p99_ms","event:error"]',
+    });
+    const none = isolationPatch({
+      resourceVersion: "77",
+      plan: { labels: { app: "demo-app" }, services: ["demo-app"] },
+      at: 0,
+      status: "ok",
+      actor: { kind: "user" },
+      outliers: [],
+    }) as { metadata: { annotations: Record<string, string> } };
+    expect(none.metadata.annotations).not.toHaveProperty(
+      "glasspod/isolated-outliers",
+    );
   });
 });

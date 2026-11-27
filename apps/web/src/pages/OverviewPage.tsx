@@ -1,10 +1,11 @@
 // 오른쪽 자리, Pod를 고르기 전입니다: Deployment별 요약과 최근 30분 판단 변화(design.md 5.3, docs/guides/T18.md 결정 17, 18).
-// 타임라인에는 조치도 섞습니다(docs/guides/T21.md 결정 21).
+// 타임라인에는 조치와 자동 규칙 기록도 섞습니다(docs/guides/T21.md 결정 21, T28 결정 2).
 // Deployment 카드의 '스케일 조정'은 오른쪽 서랍을 엽니다(docs/guides/T24.md 결정 1, 12).
 import type {
   ActionItem,
   PodRef,
   PodStatusChange,
+  RuleFiring,
   StatusChangesBody,
 } from "@glasspod/protocol";
 import { useCallback, useEffect, useState } from "react";
@@ -12,8 +13,14 @@ import { Link } from "react-router";
 import type { ApiResult } from "../api/client.js";
 import { getStatusChanges } from "../api/pods.js";
 import { useActionHistory } from "../api/useActionHistory.js";
+import { useRuleHistory } from "../api/useRuleHistory.js";
 import { ActionTargetLink, ResultBadge } from "../actions/ActionParts.js";
 import { ScaleDrawer } from "../actions/ScaleDrawer.js";
+import {
+  FiringTargetLink,
+  ModeBadge,
+  OutcomeBadge,
+} from "../rules/RuleParts.js";
 import { podLink, useShell } from "../shell/shellContext.js";
 import {
   ChevronRightIcon,
@@ -39,6 +46,11 @@ import {
 } from "../view/actionText.js";
 import { changeSentence, formatClock, statusTone } from "../view/podText.js";
 import {
+  firingConditionsText,
+  firingSentence,
+  firingTone,
+} from "../view/ruleText.js";
+import {
   TIMELINE_LIMIT,
   mergeOverviewTimeline,
   summarizeDeployments,
@@ -59,6 +71,7 @@ export function OverviewPage() {
     stream.opens,
     stream.state?.actions ?? [],
   );
+  const rules = useRuleHistory(namespace, stream.opens, stream.state);
 
   // 스케일 서랍을 연 Deployment입니다.
   const [scaling, setScaling] = useState<PodRef | undefined>(undefined);
@@ -76,6 +89,8 @@ export function OverviewPage() {
     ],
     history.actions,
     now,
+    undefined,
+    rules.firings,
   );
 
   return (
@@ -124,7 +139,7 @@ export function OverviewPage() {
             최근 30분 판단 변화와 조치
           </h2>
           <span className="text-xs text-slate-500">
-            판단이 바뀌거나 조치하면 한 줄
+            판단이 바뀌거나, 조치하거나, 자동 규칙이 발동하면 한 줄
           </span>
         </div>
         {timeline !== undefined && !timeline.result.ok && (
@@ -142,7 +157,14 @@ export function OverviewPage() {
         ) : (
           <ol className="mt-4">
             {entries.map((entry) =>
-              entry.kind === "action" ? (
+              entry.kind === "rule" ? (
+                <RuleTimelineRow
+                  key={`rule/${entry.firing.id}`}
+                  firing={entry.firing}
+                  namespace={namespace}
+                  showNamespace={showNamespace}
+                />
+              ) : entry.kind === "action" ? (
                 <ActionTimelineRow
                   key={`action/${entry.action.id}`}
                   action={entry.action}
@@ -335,6 +357,58 @@ function TimelineRow({
         </div>
         <p className="mt-1.5 text-[13px] text-slate-700">
           {changeSentence(change)}
+        </p>
+      </div>
+    </li>
+  );
+}
+
+// 자동 규칙 기록 한 줄입니다(docs/guides/T28.md 결정 2). 조치 줄과 같은 칸에 대상, 규칙·모드, 결과를 둡니다.
+function RuleTimelineRow({
+  firing,
+  namespace,
+  showNamespace,
+}: {
+  firing: RuleFiring;
+  namespace: string | undefined;
+  showNamespace: boolean;
+}) {
+  return (
+    <li className="group grid grid-cols-[4.25rem_0.75rem_minmax(0,1fr)] gap-x-3">
+      <time
+        dateTime={new Date(firing.at).toISOString()}
+        className="pt-0.5 font-mono text-xs text-slate-500"
+      >
+        {formatClock(firing.at)}
+      </time>
+      <div className="relative flex justify-center">
+        <span
+          className={`relative z-10 mt-1.5 size-2.5 rounded-full ${TONE_DOT[firingTone(firing)]}`}
+          aria-hidden="true"
+        />
+        <span
+          className="absolute top-4 -bottom-1.5 w-px bg-line group-last:hidden"
+          aria-hidden="true"
+        />
+      </div>
+      <div className="pb-5 group-last:pb-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <FiringTargetLink
+            firing={firing}
+            namespace={namespace}
+            showNamespace={showNamespace}
+          />
+          <span className="text-[13px] font-semibold text-slate-800">
+            규칙 {firing.rule}
+          </span>
+          <ModeBadge mode={firing.mode} />
+          <OutcomeBadge firing={firing} />
+        </div>
+        <p className="mt-1.5 text-[13px] text-slate-700">
+          {firingSentence(firing)}
+        </p>
+        <p className="mt-0.5 text-xs text-slate-500">
+          조건: {firingConditionsText(firing)}
         </p>
       </div>
     </li>

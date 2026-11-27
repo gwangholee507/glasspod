@@ -58,6 +58,7 @@ function changes(fields: Partial<PodListChanges>): PodListChanges {
     deployments: [],
     removedDeployments: [],
     statusChanges: [],
+    ruleFirings: [],
     actions: [],
     ...fields,
   };

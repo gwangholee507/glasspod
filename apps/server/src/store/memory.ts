@@ -13,6 +13,8 @@ import type {
   MetricsRecord,
   PodRecords,
   PruneResult,
+  RuleFiringQuery,
+  RuleFiringRecord,
   StatusChangeRecord,
   Store,
   StoreStats,
@@ -28,6 +30,8 @@ export const MAX_STATUS_CHANGES_PER_POD = 500;
 export const MAX_KUBE_EVENTS_PER_POD = 200;
 // 조치 기록은 Pod별이 아니라 서버 전체에서 이만큼 남깁니다(docs/guides/T21.md 결정 3).
 export const MAX_ACTIONS = 1_000;
+// 자동 규칙 기록도 서버 전체에서 이만큼 남깁니다(docs/guides/T28.md 결정 17).
+export const MAX_RULE_FIRINGS = 1_000;
 
 type LimitedKind =
   "metrics" | "events" | "connections" | "statusChanges" | "kubeEvents";
@@ -52,6 +56,9 @@ export class MemoryStore implements Store {
   // 넣은 순서입니다. 30분 정리에서 빠집니다.
   private readonly actionRecords: ActionRecord[] = [];
   private droppedActions = 0;
+  // 발동한 순서(at)입니다. 자동 실행은 조치가 끝난 뒤 들어오므로 넣을 때 자리를 찾습니다. 30분 정리에서 빠집니다.
+  private readonly ruleFiringRecords: RuleFiringRecord[] = [];
+  private droppedRuleFirings = 0;
   private readonly dropped: Record<LimitedKind, number> = {
     metrics: 0,
     events: 0,
@@ -142,6 +149,41 @@ export class MemoryStore implements Store {
       .sort((a, b) => a.requestedAt - b.requestedAt);
   }
 
+  async addRuleFiring(record: RuleFiringRecord): Promise<void> {
+    const records = this.ruleFiringRecords;
+    let index = records.length;
+    while (
+      index > 0 &&
+      (records[index - 1] as RuleFiringRecord).at > record.at
+    ) {
+      index -= 1;
+    }
+    records.splice(index, 0, record);
+    const over = records.length - MAX_RULE_FIRINGS;
+    if (over <= 0) {
+      return;
+    }
+    records.splice(0, over);
+    if (this.droppedRuleFirings === 0) {
+      log.warn("records dropped", {
+        kind: "ruleFirings",
+        limit: MAX_RULE_FIRINGS,
+      });
+    }
+    this.droppedRuleFirings += over;
+  }
+
+  async ruleFirings(query: RuleFiringQuery = {}): Promise<RuleFiringRecord[]> {
+    const { namespace, pod } = query;
+    return this.ruleFiringRecords.filter(
+      (record) =>
+        (namespace === undefined || record.target.namespace === namespace) &&
+        (pod === undefined ||
+          (record.pod.namespace === pod.namespace &&
+            record.pod.name === pod.name)),
+    );
+  }
+
   async podRecords(pod: PodRef, since: number): Promise<PodRecords> {
     const bucket = this.buckets.get(podKey(pod));
     if (bucket === undefined) {
@@ -212,12 +254,14 @@ export class MemoryStore implements Store {
       statusChanges: 0,
       kubeEvents: 0,
       actions: this.actionRecords.length,
+      ruleFirings: this.ruleFiringRecords.length,
       droppedMetrics: this.dropped.metrics,
       droppedEvents: this.dropped.events,
       droppedConnections: this.dropped.connections,
       droppedStatusChanges: this.dropped.statusChanges,
       droppedKubeEvents: this.dropped.kubeEvents,
       droppedActions: this.droppedActions,
+      droppedRuleFirings: this.droppedRuleFirings,
     };
     for (const bucket of this.buckets.values()) {
       stats.metrics += bucket.metrics.length;
@@ -257,6 +301,7 @@ export class MemoryStore implements Store {
   async close(): Promise<void> {
     this.buckets.clear();
     this.actionRecords.length = 0;
+    this.ruleFiringRecords.length = 0;
   }
 
   private bucket(pod: PodRef): Bucket {

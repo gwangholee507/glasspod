@@ -6,6 +6,7 @@ import type {
   PodSeverity,
   PodStatus,
   PodStatusChange,
+  RuleFiring,
 } from "@glasspod/protocol";
 import { describe, expect, it } from "vitest";
 import {
@@ -22,6 +23,7 @@ import {
   summarizeDeployments,
   isDeleted,
 } from "./podView.js";
+import type { OverviewEntry } from "./podView.js";
 
 const SEVERITY: Record<PodStatus, PodSeverity> = {
   terminated: "none",
@@ -455,6 +457,17 @@ describe("mergeOverviewTimeline", () => {
     };
   }
 
+  function entryKey(entry: OverviewEntry): string {
+    switch (entry.kind) {
+      case "action":
+        return `action:${entry.action.id}`;
+      case "rule":
+        return `rule:${entry.firing.id}`;
+      case "status":
+        return `status:${entry.change.status}`;
+    }
+  }
+
   it("조치와 판단 변화를 늦은 것부터 섞고, 같은 시각이면 조치가 먼저, 30분 밖은 뺌", () => {
     const { entries, truncated } = mergeOverviewTimeline(
       [
@@ -468,14 +481,30 @@ describe("mergeOverviewTimeline", () => {
       ],
       NOW,
     );
-    expect(
-      entries.map((entry) =>
-        entry.kind === "action"
-          ? `action:${entry.action.id}`
-          : `status:${entry.change.status}`,
-      ),
-    ).toEqual(["action:x", "status:ok", "status:stalled", "action:y"]);
+    expect(entries.map(entryKey)).toEqual([
+      "action:x",
+      "status:ok",
+      "status:stalled",
+      "action:y",
+    ]);
     expect(truncated).toBe(false);
+  });
+
+  it("규칙 기록도 섞고, 같은 시각이면 규칙이 조치보다 먼저", () => {
+    const firing = (id: string, at: number) =>
+      ({ id, at }) as unknown as RuleFiring;
+    const { entries } = mergeOverviewTimeline(
+      [[change]],
+      [action("x", NOW - 1_000)],
+      NOW,
+      undefined,
+      [firing("r", NOW - 1_000), firing("old", NOW - TIMELINE_WINDOW_MS - 1)],
+    );
+    expect(entries.map(entryKey)).toEqual([
+      "rule:r",
+      "action:x",
+      "status:stalled",
+    ]);
   });
 
   it("limit줄까지", () => {

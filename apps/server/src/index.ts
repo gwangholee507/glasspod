@@ -2,6 +2,7 @@
 // 쿠버네티스 watch는 그 뒤에서 시작합니다(docs/guides/T12.md). Pod 상태 판단은 1초마다 합니다(docs/guides/T13.md).
 // 판단 뒤에 웹 화면용 목록을 다시 만들어 바뀐 것을 SSE로 보냅니다(docs/guides/T14.md).
 // 조치는 GLASSPOD_ACTION_NAMESPACES의 namespace에서만 실행합니다(docs/guides/T21.md).
+// 자동 규칙은 GLASSPOD_RULES_FILE을 5초마다 읽고, 판단 주기마다 지표 비교 뒤에 봅니다(docs/guides/T28.md).
 import { createServer } from "node:http";
 import { PROTOCOL_VERSION } from "@glasspod/protocol";
 import { ActionService } from "./actions.js";
@@ -18,6 +19,8 @@ import { createKubeActions } from "./kube-actions.js";
 import type { KubeConnection, KubeSource } from "./kube.js";
 import { log } from "./log.js";
 import { AppStates } from "./pods.js";
+import { RuleEngine } from "./rule-engine.js";
+import { RulesSource } from "./rules-file.js";
 import { STATUS_INTERVAL_MS, StatusMonitor } from "./status-monitor.js";
 import { MemoryStore } from "./store/memory.js";
 import { StreamHub } from "./stream.js";
@@ -87,6 +90,8 @@ const feed = new PodFeed({
   actionNamespaces: config.actionNamespaces,
   metricsIntervalMs: config.metricsIntervalMs,
   outliers,
+  // 규칙 엔진은 조치(actions)를 쓰므로 아래에서 만듭니다. 판단 주기에만 부르므로 그때는 만들어져 있습니다.
+  rules: { view: () => rules.view() },
 });
 const streams = new StreamHub();
 // 조치 실행과 기록입니다. 끝난 조치는 다음 판단 주기의 SSE changes로 화면에 갑니다.
@@ -98,6 +103,23 @@ const actions = new ActionService({
   onRecorded: (item) => feed.queueAction(item),
   // 트래픽에서 뺄 때 '격리할 때 판단'으로 남깁니다(docs/guides/T23.md 결정 5).
   statusOf: (pod) => statuses.get(pod)?.status,
+  // 그때 다른 Pod보다 높던 값도 남깁니다(docs/guides/T28.md 결정 21).
+  outliersOf: (pod) => outliers.get(pod).map((outlier) => outlier.metric),
+});
+// 자동 규칙 파일과 규칙 엔진입니다(docs/guides/T28.md). 발동 기록은 다음 판단 주기의 SSE changes로 화면에 갑니다.
+const rulesSource = new RulesSource({ path: config.rulesFile });
+const rules = new RuleEngine({
+  source: rulesSource,
+  statuses,
+  apps,
+  cluster,
+  outliers,
+  actions,
+  store,
+  namespaces: config.namespaces,
+  actionNamespaces: config.actionNamespaces,
+  metricsIntervalMs: config.metricsIntervalMs,
+  onFiring: (firing) => feed.queueRuleFiring(firing),
 });
 // Pod가 지워지면 마지막 요약을 남기고, 그 Pod의 SDK 연결이 남아 있으면 닫습니다(docs/guides/T13.md 결정 4).
 // Pod에 대한 쿠버네티스 Event는 저장소에 30분 남깁니다(docs/guides/T19.md 결정 8).
@@ -128,6 +150,7 @@ const server = createServer(
     feed,
     streams,
     actions,
+    rules,
     metricsIntervalMs: config.metricsIntervalMs,
   }),
 );
@@ -138,6 +161,7 @@ const statusTimer = setInterval(() => {
   try {
     const changes = statuses.evaluate();
     outliers.evaluate();
+    rules.evaluate();
     streams.broadcast(feed.refresh(changes));
   } catch (error) {
     log.error("pod status failed", {
@@ -162,7 +186,9 @@ server.listen(config.port, () => {
     store: store.kind,
     // 비면 조치가 꺼져 있습니다(docs/guides/T21.md 결정 2).
     actionNamespaces: config.actionNamespaces.join(",") || "none",
+    rulesFile: config.rulesFile ?? "none",
   });
+  rulesSource.start();
   // 서버 시작을 기다리게 하지 않습니다. 클러스터에 닿지 않으면 watch가 스스로 다시 시도합니다.
   if (watcher === undefined) {
     log.warn("kube watch disabled", {
@@ -186,6 +212,7 @@ function shutdown(signal: NodeJS.Signals): void {
   clearInterval(pruneTimer);
   clearInterval(statsTimer);
   clearInterval(statusTimer);
+  rulesSource.stop();
   // 열린 SSE 응답이 있으면 server.close()가 끝나지 않으므로 먼저 닫습니다.
   streams.closeAll();
   for (const client of agentServer.clients) {

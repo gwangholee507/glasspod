@@ -1,5 +1,5 @@
 // 이 파일은 `npm run generate`가 만든 것입니다. 직접 고치지 마세요.
-// 고칠 때는 스키마(schema/sdk-message.schema.json, schema/server-message.schema.json, schema/snapshot.schema.json)를 고친 뒤 다시 만듭니다.
+// 고칠 때는 스키마(schema/sdk-message.schema.json, schema/server-message.schema.json, schema/snapshot.schema.json, schema/rules.schema.json)를 고친 뒤 다시 만듭니다.
 
 // schema/sdk-message.schema.json
 export const sdkMessageSchema = {
@@ -437,6 +437,341 @@ export const snapshotDataSchema = {
           description: "JavaScript 힙 사용량(바이트)입니다.",
           type: "integer",
           minimum: 0,
+        },
+      },
+    },
+  },
+};
+
+// schema/rules.schema.json
+export const rulesFileSchema = {
+  $schema: "http://json-schema.org/draft-07/schema#",
+  title: "RulesFile",
+  description:
+    "자동 규칙 파일입니다(design.md 5.5, docs/guides/T28.md). ConfigMap glasspod-rules의 rules.yaml을 YAML로 읽은 값이고, 서버는 validateRulesFile로 검증합니다. 사람이 손으로 쓰는 파일이라 모르는 필드는 틀린 파일로 봅니다(오타를 그냥 지나치지 않음).",
+  type: "object",
+  additionalProperties: false,
+  required: ["rules"],
+  properties: {
+    rules: {
+      description:
+        "규칙입니다. 서버는 이 순서로 봅니다. 이름은 파일 안에서 겹치지 않아야 합니다(서버가 따로 확인).",
+      type: "array",
+      maxItems: 50,
+      items: {
+        $ref: "#/definitions/Rule",
+      },
+    },
+  },
+  definitions: {
+    Rule: {
+      title: "RuleSpec",
+      description:
+        "규칙 하나입니다: 조건(when)이 모두 지속 시간(for)만큼 맞으면 조치(action)를 합니다. 모드가 notify면 실행하지 않고 '실행했을 것'만 남깁니다.",
+      type: "object",
+      additionalProperties: false,
+      required: ["name", "target", "when", "action", "cooldown"],
+      properties: {
+        name: {
+          description:
+            "규칙 이름입니다(DNS-1123 label). 조치 기록의 실행 주체와 격리 주석(rule:<이름>)에 남습니다.",
+          type: "string",
+          minLength: 1,
+          maxLength: 63,
+          pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+        },
+        mode: {
+          description:
+            "off: 보지 않음(기본), notify: 알림만(실행했을 것을 기록), auto: 자동 실행",
+          type: "string",
+          enum: ["off", "notify", "auto"],
+        },
+        description: {
+          description: "화면에 보일 설명입니다.",
+          type: "string",
+          maxLength: 200,
+        },
+        target: {
+          $ref: "#/definitions/RuleTarget",
+        },
+        when: {
+          description:
+            "조건입니다. 모두 맞을 때만(AND) 발동합니다. OR가 필요하면 규칙을 둘로 나눕니다.",
+          type: "array",
+          minItems: 1,
+          maxItems: 5,
+          items: {
+            $ref: "#/definitions/RuleCondition",
+          },
+        },
+        action: {
+          $ref: "#/definitions/RuleActionSpec",
+        },
+        cooldown: {
+          description:
+            "발동한 뒤 쉬는 시간입니다(30s~24h). 알림만·실행·건너뜀 모두 쉽니다.",
+          $ref: "#/definitions/Duration",
+        },
+        maxPerHour: {
+          description:
+            "최근 1시간에 발동할 수 있는 횟수(알림만과 실행)입니다. 넘으면 건너뜁니다.",
+          type: "integer",
+          minimum: 1,
+          maximum: 60,
+        },
+      },
+    },
+    RuleTarget: {
+      title: "RuleTarget",
+      description:
+        "규칙이 보는 Pod입니다. 이 namespace에서 이 Deployment가 만든 Pod입니다.",
+      type: "object",
+      additionalProperties: false,
+      required: ["namespace", "deployment"],
+      properties: {
+        namespace: {
+          type: "string",
+          minLength: 1,
+          maxLength: 63,
+          pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+        },
+        deployment: {
+          type: "string",
+          minLength: 1,
+          maxLength: 253,
+          pattern: "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+        },
+      },
+    },
+    Duration: {
+      description:
+        "시간입니다. 숫자 뒤에 s(초)·m(분)·h(시간)를 붙입니다. 예: 30s, 2m, 1h",
+      type: "string",
+      pattern: "^[0-9]{1,5}(s|m|h)$",
+    },
+    SignalMetric: {
+      description:
+        "SDK 지표 이름(예: app.queue.length, http.requests.duration_p99_ms)이나 event:error(error 수준 SDK event의 분당 수)입니다.",
+      type: "string",
+      maxLength: 200,
+      pattern: "^(event:error|[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+)$",
+    },
+    RuleCondition: {
+      title: "RuleConditionSpec",
+      description:
+        "조건 하나입니다. 신호 이름(status, outlier, metric) 하나를 키로 씁니다.",
+      oneOf: [
+        {
+          $ref: "#/definitions/StatusCondition",
+        },
+        {
+          $ref: "#/definitions/OutlierCondition",
+        },
+        {
+          $ref: "#/definitions/MetricAboveCondition",
+        },
+        {
+          $ref: "#/definitions/MetricBelowCondition",
+        },
+      ],
+    },
+    StatusCondition: {
+      title: "StatusConditionSpec",
+      description: "서버의 판단(design.md 7.5)이 이 가운데 하나입니다.",
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "for"],
+      properties: {
+        status: {
+          type: "array",
+          minItems: 1,
+          uniqueItems: true,
+          items: {
+            type: "string",
+            enum: [
+              "terminated",
+              "pod-failing",
+              "stalled",
+              "disconnected",
+              "restarted",
+              "not-ready",
+              "starting",
+              "no-sdk",
+              "ok",
+            ],
+          },
+        },
+        for: {
+          description: "이 조건이 이어져야 하는 시간입니다(0s~1h).",
+          $ref: "#/definitions/Duration",
+        },
+      },
+    },
+    OutlierCondition: {
+      title: "OutlierConditionSpec",
+      description:
+        "이 값이 같은 Deployment의 다른 Pod보다 눈에 띄게 높습니다(design.md 7.6, 강조가 켜진 상태).",
+      type: "object",
+      additionalProperties: false,
+      required: ["outlier", "for"],
+      properties: {
+        outlier: {
+          $ref: "#/definitions/SignalMetric",
+        },
+        for: {
+          description: "강조가 켜진 뒤 이어져야 하는 시간입니다(0s~1h).",
+          $ref: "#/definitions/Duration",
+        },
+      },
+    },
+    MetricAboveCondition: {
+      title: "MetricAboveConditionSpec",
+      description:
+        "지표 값이 기준보다 큽니다. gauge는 마지막 값, counter와 event:error는 최근 60초(분당)입니다.",
+      type: "object",
+      additionalProperties: false,
+      required: ["metric", "above", "for"],
+      properties: {
+        metric: {
+          $ref: "#/definitions/SignalMetric",
+        },
+        above: {
+          type: "number",
+        },
+        for: {
+          description: "이 조건이 이어져야 하는 시간입니다(0s~1h).",
+          $ref: "#/definitions/Duration",
+        },
+      },
+    },
+    MetricBelowCondition: {
+      title: "MetricBelowConditionSpec",
+      description:
+        "지표 값이 기준보다 작습니다. gauge는 마지막 값, counter와 event:error는 최근 60초(분당)입니다.",
+      type: "object",
+      additionalProperties: false,
+      required: ["metric", "below", "for"],
+      properties: {
+        metric: {
+          $ref: "#/definitions/SignalMetric",
+        },
+        below: {
+          type: "number",
+        },
+        for: {
+          description: "이 조건이 이어져야 하는 시간입니다(0s~1h).",
+          $ref: "#/definitions/Duration",
+        },
+      },
+    },
+    RuleActionSpec: {
+      title: "RuleActionSpec",
+      description:
+        "조치 하나입니다. restart: 조건이 맞은 Pod 재시작, isolate: 그 Pod를 트래픽에서 빼기, scale: 그 Deployment의 replica 수 바꾸기",
+      oneOf: [
+        {
+          $ref: "#/definitions/RestartAction",
+        },
+        {
+          $ref: "#/definitions/IsolateAction",
+        },
+        {
+          $ref: "#/definitions/ScaleAction",
+        },
+      ],
+    },
+    EmptyOptions: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    },
+    RestartAction: {
+      title: "RestartActionSpec",
+      type: "object",
+      additionalProperties: false,
+      required: ["restart"],
+      properties: {
+        restart: {
+          $ref: "#/definitions/EmptyOptions",
+        },
+      },
+    },
+    IsolateAction: {
+      title: "IsolateActionSpec",
+      type: "object",
+      additionalProperties: false,
+      required: ["isolate"],
+      properties: {
+        isolate: {
+          $ref: "#/definitions/EmptyOptions",
+        },
+      },
+    },
+    ScaleAction: {
+      title: "ScaleActionSpec",
+      type: "object",
+      additionalProperties: false,
+      required: ["scale"],
+      properties: {
+        scale: {
+          title: "ScaleOptions",
+          description:
+            "지금 원하는 replica 수에 by를 더하고 min~max로 자릅니다. 늘리면(by > 0) max, 줄이면 min이 필요합니다.",
+          type: "object",
+          additionalProperties: false,
+          required: ["by"],
+          properties: {
+            by: {
+              type: "integer",
+              minimum: -5,
+              maximum: 5,
+              not: {
+                const: 0,
+              },
+            },
+            min: {
+              type: "integer",
+              minimum: 0,
+              maximum: 20,
+            },
+            max: {
+              type: "integer",
+              minimum: 0,
+              maximum: 20,
+            },
+          },
+          allOf: [
+            {
+              if: {
+                type: "object",
+                properties: {
+                  by: {
+                    type: "integer",
+                    minimum: 1,
+                  },
+                },
+              },
+              then: {
+                type: "object",
+                required: ["max"],
+              },
+            },
+            {
+              if: {
+                type: "object",
+                properties: {
+                  by: {
+                    type: "integer",
+                    maximum: -1,
+                  },
+                },
+              },
+              then: {
+                type: "object",
+                required: ["min"],
+              },
+            },
+          ],
         },
       },
     },

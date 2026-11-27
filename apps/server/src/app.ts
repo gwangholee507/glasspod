@@ -11,11 +11,14 @@ import type {
   IsolationPlanBody,
   PodRef,
   QueryErrorCode,
+  RulesBody,
+  RulesView,
   StatusChangesBody,
 } from "@glasspod/protocol";
 import { parseActionRequest } from "./actions.js";
 import type { ActionService } from "./actions.js";
 import type { AgentRegistry } from "./agents.js";
+import { rulesIn } from "./feed.js";
 import type { PodFeed } from "./feed.js";
 import { log } from "./log.js";
 import type { AppStates } from "./pods.js";
@@ -46,6 +49,8 @@ export interface AppDependencies {
   feed: PodFeed;
   streams: StreamHub;
   actions: ActionService;
+  // 자동 규칙 보기입니다(RuleEngine, docs/guides/T28.md 결정 18). 없으면 규칙이 없는 것으로 답합니다.
+  rules?: { view(): RulesView };
   // 시계열의 끊김 기준(3주기)에 씁니다(docs/guides/T19.md 결정 6).
   metricsIntervalMs: number;
   now?: () => number;
@@ -93,8 +98,16 @@ export function createApp(deps: AppDependencies): Express {
     const serverTime = now();
     const records = await store.podRecords(pod, serverTime - RETENTION_MS);
     const podActions = await store.actions({ pod });
+    const podRuleFirings = await store.ruleFirings({ pod });
     response.json(
-      podDetail(item, apps.get(pod), records, serverTime, podActions),
+      podDetail(
+        item,
+        apps.get(pod),
+        records,
+        serverTime,
+        podActions,
+        podRuleFirings,
+      ),
     );
   });
 
@@ -251,6 +264,24 @@ export function createApp(deps: AppDependencies): Express {
   });
 
   // SSE: 연결 직후 목록 전체(pods), 그 뒤 판단 주기마다 바뀐 것(changes)을 보냅니다.
+  // 자동 규칙 파일 상태, 규칙과 지금 상태, 규칙 기록입니다(docs/guides/T28.md 결정 18).
+  app.get("/api/rules", async (request, response) => {
+    const query = parseNamespaceQuery(request.query.namespace);
+    if (!query.ok) {
+      sendError(response, 400, "invalid-query", query.detail);
+      return;
+    }
+    const view = deps.rules?.view() ?? { file: {}, rules: [] };
+    const body: RulesBody = {
+      serverTime: now(),
+      ...rulesIn(view, query.namespace),
+      firings: await store.ruleFirings(
+        query.namespace === undefined ? {} : { namespace: query.namespace },
+      ),
+    };
+    response.json(body);
+  });
+
   app.get("/api/stream", (request, response) => {
     const query = parseNamespaceQuery(request.query.namespace);
     if (!query.ok) {

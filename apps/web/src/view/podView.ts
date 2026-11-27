@@ -7,6 +7,7 @@ import type {
   PodSeverity,
   PodStatus,
   PodStatusChange,
+  RuleFiring,
 } from "@glasspod/protocol";
 import {
   STATUS_LABEL,
@@ -404,18 +405,28 @@ export function mergeStatusChanges(
 
 export type OverviewEntry =
   | { kind: "status"; at: number; change: PodStatusChange }
-  | { kind: "action"; at: number; action: ActionItem };
+  | { kind: "action"; at: number; action: ActionItem }
+  | { kind: "rule"; at: number; firing: RuleFiring };
 
-// 판단 변화(GET + 스트림)와 조치를 30분 안에서 늦은 것부터 limit줄까지 섞습니다. 같은 시각이면 조치가 먼저입니다.
+// 판단 변화(GET + 스트림), 조치, 자동 규칙 기록(docs/guides/T28.md 결정 2)을 30분 안에서 늦은 것부터 limit줄까지 섞습니다.
+// 같은 시각이면 규칙 기록 → 조치 → 판단 변화 순서입니다(규칙이 발동해 조치가 따라옴).
 export function mergeOverviewTimeline(
   changeLists: readonly (readonly PodStatusChange[])[],
   actions: readonly ActionItem[],
   now: number,
   limit: number = TIMELINE_LIMIT,
+  firings: readonly RuleFiring[] = [],
 ): { entries: OverviewEntry[]; truncated: boolean } {
   const since = now - TIMELINE_WINDOW_MS;
   const { changes } = mergeStatusChanges(changeLists, now, Infinity);
   const entries: OverviewEntry[] = [
+    ...firings
+      .filter((firing) => firing.at >= since)
+      .map((firing): OverviewEntry => ({
+        kind: "rule",
+        at: firing.at,
+        firing,
+      })),
     ...actions
       .filter((action) => action.requestedAt >= since)
       .map((action): OverviewEntry => ({

@@ -18,6 +18,13 @@ import {
 } from "./actionText.js";
 import { changeSentence, formatMs, statusTone } from "./podText.js";
 import type { Tone } from "./podText.js";
+import {
+  MODE_LABEL,
+  OUTCOME_LABEL,
+  firingConditionsText,
+  firingSentence,
+  firingTone,
+} from "./ruleText.js";
 
 // ── 다시 받기(결정 11) ──
 
@@ -41,7 +48,7 @@ export function refreshDelayMs(
 export const WHAT_HAPPENED_LIMIT = 100;
 
 export type TimelineKind =
-  "event" | "kube" | "connection" | "status" | "restart" | "action";
+  "event" | "kube" | "connection" | "status" | "restart" | "action" | "rule";
 
 export interface TimelineRow {
   key: string;
@@ -141,14 +148,26 @@ function eventRow(
 }
 
 // 상세 본문과 목록 항목으로 '무슨 일이 있었나' 줄을 만듭니다. 늦은 것부터 limit줄까지입니다.
-// 같은 시각이면 조치 → 재시작 → 쿠버네티스 → 판단 → 연결 → event 순서입니다.
-// 조치는 30분이 지나도 상세 본문에 남아 있으므로 그 줄도 그대로 보입니다(docs/guides/T21.md 결정 21).
+// 같은 시각이면 규칙 → 조치 → 재시작 → 쿠버네티스 → 판단 → 연결 → event 순서입니다.
+// 조치와 규칙 기록은 30분이 지나도 상세 본문에 남아 있으므로 그 줄도 그대로 보입니다(docs/guides/T21.md 결정 21, T28 결정 2).
 export function whatHappened(
   detail: PodDetailBody,
   item: PodItem,
   limit = WHAT_HAPPENED_LIMIT,
 ): { rows: TimelineRow[]; truncated: boolean } {
   const rows: TimelineRow[] = [];
+  // 예전 서버의 본문에는 ruleFirings가 없을 수 있습니다.
+  for (const firing of detail.ruleFirings ?? []) {
+    rows.push({
+      key: `rule/${firing.id}`,
+      at: firing.at,
+      kind: "rule",
+      tone: firingTone(firing),
+      label: "규칙",
+      title: `${firing.rule} · ${MODE_LABEL[firing.mode]} · ${OUTCOME_LABEL[firing.outcome]}`,
+      detail: `${firingSentence(firing)} 조건: ${firingConditionsText(firing)}`,
+    });
+  }
   for (const action of detail.actions) {
     rows.push({
       key: `action/${action.id}`,

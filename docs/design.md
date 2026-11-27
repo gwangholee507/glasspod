@@ -87,7 +87,8 @@ Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 �
 | 조치 공통 | 화면의 조치 버튼 → 오른쪽 확인 서랍 → 서버 `POST /api/actions`(`{ action, target, expectedUid }`, JSON만) → 쿠버네티스 호출(10초 제한). 서버는 namespace 제한(`GLASSPOD_ACTION_NAMESPACES`, 없으면 조치 꺼짐, watch하는 namespace 안에서만), 대상 Pod uid 확인, 같은 대상 중복 막기를 차례로 검사하고, 형식이 맞는 요청은 결과와 상관없이 기록함(실행 주체는 로그인이 없어 '개발자'). 기록은 `GET /api/actions`, 상세 본문의 `actions`, SSE `changes.actions`로 화면에 감. 첫 조치는 Pod 재시작(Pod 삭제, `preconditions.uid`). 자세한 내용은 `docs/guides/T21.md` | 확정 (2026-11-21) |
 | 트래픽에서 빼기(격리) | 서버가 Pod를 새로 읽고 ReplicaSet selector와 Service를 읽어, 이 Pod를 고르는 Service마다와 ReplicaSet selector에서 키 하나씩(함께 쓰는 키 먼저)을 떼는 merge patch 한 번(`resourceVersion` 포함). 격리 상태는 Pod에 남김: 표시 라벨 `glasspod/isolated=true`, 주석 `glasspod/isolated-at`·`-labels`·`-status`·`-deployment`·`-replicaset`·`-by`. 서랍을 열 때 `GET /api/pods/:namespace/:name/isolation-plan`으로 뗄 라벨과 빠질 Service를 보여 줌. 격리된 Pod는 `delete-pod`로만 지우고(재시작·다시 빼기는 409 `target-isolated`), 격리되지 않은 Pod의 `delete-pod`는 409 `target-not-isolated`. 이 Pod를 고르는 Service가 없으면 409 `cannot-isolate`. 되돌리기는 없음. 자세한 내용은 `docs/guides/T23.md` | 확정 (2026-11-23) |
 | 스케일 조정 | 한눈에 보기의 Deployment 카드에서 서랍을 열어 replica 수(0~20 정수)를 고름. 조치 `scale-deployment`의 대상은 Deployment(`ActionTarget.kind: "deployment"`, `expectedUid`는 Deployment uid, 요청에 `replicas`). 서버는 scale 하위 자원을 읽어(기록의 from) uid precondition을 넣은 merge patch 한 번(`resourceVersion`은 넣지 않음). 서버가 HPA(autoscaling/v2)를 watch해 Deployment 항목에 `hpa`(이름·최소·최대)를 붙이고, 화면은 카드와 서랍에 경고하되 실행은 막지 않음. 기록 `ActionItem.scale { from?, to, hpa? }`. 자세한 내용은 `docs/guides/T24.md` | 확정 (2026-11-24) |
-| 자동 규칙 문법 | M1 점검(T26)이 끝난 뒤 정함. 규칙의 조건이 T13의 상태 판단과 실제로 쓰는 지표 이름에 기대기 때문 | 미정. 정할 시점만 정함 (2026-11-14) |
+| 자동 규칙 문법 | 규칙은 YAML로 적어 서버 매니페스트(`deploy/server/`)의 ConfigMap에 두고 `kubectl apply`로 바꿈. git에 남아 리뷰할 수 있고 서버를 다시 시작해도 남음. 모드(꺼짐·알림만·자동, 기본 꺼짐)도 규칙마다 파일에 적고, 화면은 규칙과 '알림만' 결과를 보여 주기만 함(로그인이 없고 저장소가 메모리라 화면에서 고치지 않음). 조건은 정해진 칸(신호, 비교, 값, 지속 시간)으로 쓰고, 여러 조건은 모두 맞을 때만(AND, OR는 규칙을 둘로). 조건에 쓸 수 있는 신호는 판단(`PodStatus`, 7.5), 다른 Pod보다 높은 값(`outliers`, 7.6), 지표 값 임계(gauge는 마지막 값, counter는 분당). 규칙 파일은 JSON Schema로 검증하고 틀리면 이전 규칙을 그대로 씀. 필드 이름, 서버가 읽는 방법, 화면은 T28에서 정함(5.5) | 확정 (2026-11-26) |
+| 자동 규칙 | 서버는 ConfigMap `glasspod-rules`(`deploy/server/rules.yaml`)을 Pod에 볼륨으로 붙여 `GLASSPOD_RULES_FILE`을 5초마다 다시 읽음(새 권한 없음, `kubectl apply` 뒤 kubelet이 파일을 바꾸기까지 보통 1분 안팎). 필드는 `name`·`mode`·`description`·`target { namespace, deployment }`·`when`(조건마다 `status`·`outlier`·`metric`+`above`/`below` 가운데 하나와 `for`)·`action`(`restart`·`isolate`·`scale { by, min, max }`)·`cooldown`·`maxPerHour`, 모르는 필드는 틀린 파일. 판단 주기(1초)마다 Pod별로 조건을 보고 모두 `for`만큼 이어지면 발동, 쉬는 시간은 규칙마다. 넓은 영향 막기: 한 주기에 Deployment마다 규칙 하나, Pod 조치는 건강한 Pod가 원하는 replica 수의 절반 이상 남을 때만, 규칙의 격리는 Deployment마다 1개까지, HPA가 있으면 스케일 건너뜀. 알림만도 같은 검사를 거쳐 '실행했을 것'·'건너뜀'을 남기고, 자동은 조치 길을 실행 주체 '규칙 이름'으로 부름. 기록은 서버 전체 최근 1,000건. 화면은 왼쪽 메뉴 '자동 규칙'과 타임라인·'무슨 일이 있었나'의 규칙 줄. 자세한 내용은 5.5와 `docs/guides/T28.md` | 확정 (2026-11-27) |
 
 ## 4. 전체 구성
 
@@ -105,7 +106,7 @@ Glasspod는 **컨테이너 안의 앱이 실제로 어떻게 돌고 있는지 �
 | --- | --- | --- |
 | SDK | 감시 대상 앱 안 (라이브러리) | 앱 내부 상태 수집, 서버로 전송, 서버 요청에 응답 |
 | Glasspod 서버 | 클러스터 안 Deployment | SDK 연결 수신, 쿠버네티스 watch, 상태 결합·판단, 규칙 평가, 조치 실행과 기록 |
-| 웹 화면 | 개발자 브라우저 | 목록·상세 표시, 조치 버튼, 규칙 관리 |
+| 웹 화면 | 개발자 브라우저 | 목록·상세 표시, 조치 버튼, 자동 규칙과 그 기록 보기(규칙은 ConfigMap에서 고침) |
 | Kubernetes API | 클러스터 (기존) | 클러스터 상태 제공, 조치 수행 |
 
 ## 5. 구성 요소별 동작
@@ -146,14 +147,14 @@ SDK가 앱을 망치면 안 됩니다. 다음을 지킵니다.
 
 화면 구성은 2026-11-15에 Figma 시안 세 가지(표 중심, 유리 타일, 문제 먼저)를 같은 데이터로 그려 비교한 뒤 정했습니다. 시안 파일(Figma 'Glasspod UI 시안')은 저장소 밖에 있습니다. 밝은 화면만 만듭니다(12장).
 
-- **틀**: 왼쪽 메뉴, 가운데 Pod 목록, 오른쪽 상세의 분할 화면입니다. 목록과 상세를 오가지 않고 한 화면에서 원인을 따라갑니다(6장). 왼쪽 메뉴에는 namespace 고르기, Pod, 격리된 Pod, 조치 기록, 실시간 연결 상태를 둡니다.
+- **틀**: 왼쪽 메뉴, 가운데 Pod 목록, 오른쪽 상세의 분할 화면입니다. 목록과 상세를 오가지 않고 한 화면에서 원인을 따라갑니다(6장). 왼쪽 메뉴에는 namespace 고르기, Pod, 격리된 Pod, 조치 기록, 자동 규칙(T28), 실시간 연결 상태를 둡니다.
 - **목록**: 강조할 Pod(위험, 주의)를 '지금 볼 것'으로 묶어 맨 위에 두고, 그 아래는 정상, SDK 없음처럼 판단별로 묶습니다. Deployment별로 묶어 보기도 둡니다. 항목마다 상태 배지, Pod 이름, 판단 이유, 지표 3개(이벤트 루프 지연 p99, 힙 사용, HTTP 요청 p99)를 보여 줍니다. 5xx 응답이 있으면(분당 0보다 크면) 작은 표시를 붙입니다. HTTP 지표를 보내지 않는 앱과, 받은 지 지표 3주기보다 지난 값(요청이 끊긴 Pod의 요청 p99 등)은 '—'로 둡니다. 같은 Deployment의 다른 Pod보다 지표가 높은 Pod(7.6)는 판단이 정상이어도 주의로 '지금 볼 것'에 넣고, 그 지표 칸을 주의 색으로 칠하고 '다른 Pod보다 높음' 한 줄을 붙입니다(2026-11-25, `docs/guides/T34.md`).
 - **오른쪽, Pod를 고르기 전**: Deployment별 요약(쿠버네티스 Ready 수와 Glasspod 판단별 수)과 최근 30분 판단 변화 타임라인
 - **상세**: 머리줄(상태 배지, Pod 이름, 조치 버튼), '무슨 일이 있었나'(재시작과 원인 후보 event를 시간 순으로), 지표 그래프 4개(같은 Deployment의 다른 Pod 선과 재시작 지점을 함께 그림, 기간 5·15·30분, 기본 30분), snapshot, 이 Pod의 조치 기록. 기본 기간 30분은 서버 보관 기간이자 '재시작' 판단이 남는 시간이라 재시작 전후가 늘 보입니다.
 - **조치 버튼**: 오른쪽 서랍에서 확인한 뒤 서버로 요청합니다. 서랍은 대상, 일어날 일, 조치 뒤의 영향(예: 트래픽에서 빼면 트래픽을 받을 Pod와 그 판단)을 보여 줍니다. 브라우저는 쿠버네티스를 직접 호출하지 않고, 권한은 서버에만 있습니다.
 - **격리된 Pod**: 격리한 때와 그때의 판단, 지금 판단과 지표, 삭제 버튼
 - **조치 기록**: 시각, 조치, 대상, 실행 주체, 결과, 내용. 자동 규칙(확장 기능)이 실행한 조치는 실행 주체에 규칙 이름이 들어갑니다.
-- **규칙 관리**: 확장 기능
+- **자동 규칙**(2026-11-27, `docs/guides/T28.md`): 가운데 목록 칸 없이 넓게 씁니다. 위에 규칙 파일 상태(읽은 시각, 틀렸으면 그 이유와 '이전 규칙을 그대로 씁니다'), 규칙마다 카드(모드 배지, 대상 Deployment, 조건, 조치와 쉬는 시간, 지금 조건이 맞는 Pod와 '12초째 · 18초 뒤 발동', 쉬는 중, 미리 알릴 것), 아래에 기록 표(시각, 규칙·모드, 조치, 대상, 결과 '실행했을 것'·'실행함'·'건너뜀', 문장과 그때 값)입니다. 규칙은 화면에서 고치지 않습니다. 한눈에 보기 타임라인과 상세 '무슨 일이 있었나'에도 규칙 기록이 한 줄씩 들어가고, 격리된 Pod 카드의 '격리할 때 판단'에는 그때 다른 Pod보다 높던 값의 이름이 붙습니다.
 - **말투**: 화면 글은 '~합니다'로 씁니다.
 - **서버 API**(2026-11-16, `docs/guides/T14.md`): 화면은 목록·상세·판단 변화 조회 API와 SSE 하나(`/api/stream`)로 받습니다. 목록 지표는 지금 instance의 마지막 값(받은 지 지표 3주기보다 지난 값은 뺌, 2026-11-25 T34)이고, 5xx/분은 `http.requests.errors_total`의 최근 60초 증가량 합입니다. Pod 항목에는 지표 비교(7.6)의 `outliers`가 있을 때만 붙습니다. 화면의 '몇 초째'는 본문의 `serverTime`(서버 시계)으로 셉니다.
 - **목록 화면 구현**(2026-11-17, `docs/guides/T18.md`): 모든 화면이 분할 화면 틀 안에 그려지고 오른쪽 자리만 주소로 바뀝니다(`/` 한눈에 보기, `/pods/:namespace/:name` 상세). 고른 namespace는 주소의 `?namespace=`로 이어 갑니다. 틀이 SSE 연결 하나를 열어 세 칸이 함께 쓰고, 서버 시계로 1초마다 시간을 다시 셉니다. 짧게 지나가는 판단(새 Pod의 1~2초 '준비 안 됨', 크래시 직후의 '연결 끊김')도 거르지 않고 바로 보여 줍니다(거르는 일은 자동 규칙의 지속 시간). 서버의 판단 근거(`reason`)는 코드 값이라 화면 문장은 웹이 판단과 구조 필드로 만듭니다. 격리된 Pod와 조치 기록 메뉴는 그 화면을 만들 때까지 '준비 중'으로 뒀습니다(T21·T23에서 살림). 지표 값은 지표 비교(T34)가 생기기 전까지 색으로 강조하지 않았습니다.
@@ -194,7 +195,33 @@ SDK가 앱을 망치면 안 됩니다. 다음을 지킵니다.
 - **예**: `app.queue.length`가 1,000을 넘은 채 2분 계속되면 replica를 1 늘린다 (최대 5개, 10분에 한 번까지)
 - **안전장치**: 조건 지속 시간(순간적으로 튄 값 무시), 쿨다운, 상한(최대 replica, 시간당 실행 횟수), 대상 범위(namespace, Deployment)
 - **모드**: 꺼짐(기본) → 알림만 → 자동. "알림만"에서는 조건이 맞으면 실행하지 않고 "이 규칙이 지금 실행됐을 것"을 화면에 표시합니다. 개발자가 판단이 맞는지 확인한 뒤 자동으로 바꿉니다.
-- 규칙을 적는 문법은 미정입니다(10장).
+- **문법**(2026-11-26 확정, 필드는 2026-11-27 `docs/guides/T28.md`): 규칙은 ConfigMap `glasspod-rules`(`deploy/server/rules.yaml`)의 YAML이고 `kubectl apply`로 바꿉니다. 기준은 `packages/protocol/schema/rules.schema.json`입니다. 조건은 신호 이름을 키로 쓰고(`status`, `outlier`, `metric` + `above`/`below`) 모두 `for`(0s~1h)가 필요하며, 여러 조건은 모두 맞을 때만입니다. 조치는 `restart`(조건이 맞은 Pod 재시작), `isolate`(그 Pod를 트래픽에서 빼기), `scale { by, min, max }`(그 Deployment의 원하는 수에 by를 더하고 범위로 자름)이고 삭제는 하지 않습니다. `cooldown`(30s~24h)은 필수, `maxPerHour`는 선택입니다. 모르는 필드, 이름 겹침, 범위 밖 시간이 있으면 틀린 파일이고, 서버는 이전 규칙을 그대로 쓰고 화면과 로그(`rules invalid`)에 알립니다.
+- **신호 읽기**: `status`는 지금 판단, `outlier`는 그 Pod에 켜진 지표 비교 강조(7.6), `metric`은 gauge의 마지막 값, counter의 최근 60초 증가량, `event:error`(error event 분당)입니다. 받은 지 3주기보다 지난 값은 맞지 않는 것으로 봅니다. 조건은 Pod마다이고, 규칙은 대상 Deployment의 Pod 가운데 쿠버네티스에 있고 지워지는 중이 아니며 트래픽에서 빼지 않은 Pod만 봅니다.
+- **발동과 넓은 영향 막기**: 조건을 채운 Pod가 있고 쉬는 중이 아니면 먼저 채운 Pod로 발동합니다. 쉬는 시간은 규칙마다이고 알림만·실행·건너뜀 모두에서 시작합니다. 한 판단 주기에 Deployment마다 규칙 하나만 발동하고(그 Deployment에 규칙 조치가 실행 중이면 기다림), Pod 조치는 그 Pod를 뺀 건강한 Pod(Ready, 위험 판단 아님, 이 규칙의 조건에 맞지 않음)가 원하는 replica 수의 절반(올림, 적어도 1)보다 적으면, 트래픽에서 빼기는 그 Deployment에 격리된 Pod가 있으면, 스케일은 HPA가 있거나 이미 한도면 건너뜁니다. 알림만도 같은 검사를 거칩니다.
+- **실행과 기록**: 자동은 수동과 같은 조치 길(5.4 '검사')을 실행 주체 '규칙 이름'으로 부르므로 조치 기록과 격리 주석(`glasspod/isolated-by: rule:<이름>`)에 규칙 이름이 남습니다. 규칙 기록(실행했을 것·실행함·건너뜀, 맞은 조건과 그때 값)은 서버 전체 최근 1,000건을 메모리에 남기고, 규칙 상태(조건 시각, 쉬는 시간)도 메모리라 서버를 다시 시작하면 처음부터 셉니다.
+
+```yaml
+rules:
+  - name: slow-pod-isolate
+    mode: notify # off(기본) | notify | auto
+    description: 요청 p99가 같은 Deployment의 다른 Pod보다 높은 채 30초가 지나면 트래픽에서 뺍니다.
+    target: { namespace: glasspod-demo, deployment: demo-app }
+    when:
+      - outlier: http.requests.duration_p99_ms
+        for: 30s
+    action: { isolate: {} }
+    cooldown: 10m
+    maxPerHour: 2
+  - name: queue-scale
+    mode: off
+    target: { namespace: glasspod-demo, deployment: demo-app }
+    when:
+      - metric: app.queue.length
+        above: 50
+        for: 1m
+    action: { scale: { by: 1, max: 5 } }
+    cooldown: 10m
+```
 
 ## 6. 대표 시나리오: Pod 하나가 느려질 때
 
@@ -206,6 +233,8 @@ SDK가 앱을 망치면 안 됩니다. 다음을 지킵니다.
 6. 같은 일이 반복되면 규칙으로 등록합니다. 처음에는 알림만 받다가 나중에 자동으로 바꿉니다.
 
 첫 마일스톤(M1) 점검(2026-11-26, `docs/guides/T26.md`): 로컬 클러스터에 두 namespace를 처음부터 배포하고 데모 앱(Pod 3개, 부하 초당 20건)으로 1~5단계를 화면에서 따라갔습니다. 한 Pod에 느려짐을 켜자 큐가 초당 약 1.1씩 쌓이는 동안 쿠버네티스는 Ready 그대로였고, 약 20~25초 뒤 요청 p99·5xx·큐·예외가 다른 Pod보다 높아 '지금 볼 것'에 들어갔습니다. 상세에서 `TimeoutError: DB timeout after 1000ms`를 확인하고 트래픽에서 빼자 새 Pod가 1초 안에 정상이 되고 그 Pod는 새 요청 없이 남았으며, 격리된 Pod 화면에서 지웠습니다. 그동안 부하의 연결 실패는 0건입니다. 6단계는 자동 규칙(T28)입니다.
+
+6단계 점검(2026-11-27, `docs/guides/T28.md`): 같은 클러스터에서 `slow-pod-isolate` 규칙을 알림만으로 두고 한 Pod에 느려짐을 켜자 약 50초 뒤(강조 약 20초 + 30초) '실행했을 것'이 남고 조치는 없었습니다. 자동으로 바꿔 apply하자 그 Pod를 규칙이 트래픽에서 뺐고(조치 기록의 실행 주체 `slow-pod-isolate`), 다른 Pod가 느려졌을 때는 이미 격리된 Pod가 있어 건너뛰었습니다.
 
 ## 7. SDK–서버 프로토콜 v1 (초안)
 
@@ -475,9 +504,7 @@ glasspod.stop();                                        // 연결을 닫음. 이
 
 ## 10. 미정 사항
 
-| 항목 | 현재 상황과 제안 |
-| --- | --- |
-| 규칙 문법 | M1 점검(T26)이 끝난 뒤 정함(2026-11-14) |
+지금 미정인 항목은 없습니다. 규칙 문법은 2026-11-26에 정했습니다(3장 '자동 규칙 문법'). 확장 작업의 세부(PostgreSQL 어댑터의 보관 기간과 테이블 구성, 다크 모드 색)는 그 작업에서 정합니다.
 
 ## 11. 이후 확장
 

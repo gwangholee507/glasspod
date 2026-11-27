@@ -243,6 +243,8 @@ export interface ActionServiceOptions {
   onRecorded?: (item: ActionItem) => void;
   // 지금 판단입니다. 트래픽에서 뺄 때 '격리할 때 판단'으로 주석에 남깁니다(T23 결정 5).
   statusOf?: (pod: PodRef) => PodStatus | undefined;
+  // 지금 다른 Pod보다 높은 값의 이름입니다. 트래픽에서 뺄 때 주석에 남깁니다(T28 결정 21).
+  outliersOf?: (pod: PodRef) => readonly string[];
   now?: () => number;
   newId?: () => string;
 }
@@ -483,6 +485,7 @@ export class ActionService {
             at: this.now(),
             status: this.options.statusOf?.(request.target),
             actor,
+            outliers: this.options.outliersOf?.(request.target) ?? [],
           }),
         );
         return {

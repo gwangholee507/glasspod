@@ -8,6 +8,8 @@ import type {
   PodListChanges,
   PodOutlier,
   PodRef,
+  RuleFiring,
+  RulesView,
 } from "@glasspod/protocol";
 import type { ClusterState } from "./cluster.js";
 import type { AppStates } from "./pods.js";
@@ -29,6 +31,8 @@ export interface PodFeedOptions {
   metricsIntervalMs: number;
   // 같은 Deployment의 다른 Pod보다 높은 값입니다(OutlierMonitor, T34). 없으면 outliers를 넣지 않습니다.
   outliers?: { get(pod: PodRef): readonly PodOutlier[] };
+  // 자동 규칙 보기입니다(RuleEngine, docs/guides/T28.md 결정 18). 바뀐 주기에만 changes.rules로 보냅니다.
+  rules?: { view(): RulesView };
   now?: () => number;
 }
 
@@ -54,9 +58,14 @@ export class PodFeed {
   private readonly actionNamespaces: readonly string[];
   private readonly freshMs: number;
   private readonly outliers: PodFeedOptions["outliers"];
+  private readonly rules: PodFeedOptions["rules"];
   private readonly now: () => number;
   // 앞 주기 뒤에 끝난 조치입니다. 다음 refresh의 changes에 넣고 비웁니다.
   private pendingActions: ActionItem[] = [];
+  // 앞 주기 뒤에 남긴 규칙 기록입니다. 다음 refresh의 changes에 넣고 비웁니다.
+  private pendingRuleFirings: RuleFiring[] = [];
+  // 앞 주기의 규칙 보기 JSON입니다.
+  private rulesJson: string | undefined;
   private pods = new Map<string, Tracked<PodItem>>();
   private deployments = new Map<string, Tracked<DeploymentItem>>();
   private namespaces: string[];
@@ -70,6 +79,7 @@ export class PodFeed {
     this.actionNamespaces = options.actionNamespaces ?? [];
     this.freshMs = stallLimitMs(options.metricsIntervalMs);
     this.outliers = options.outliers;
+    this.rules = options.rules;
     this.now = options.now ?? Date.now;
     this.namespaces = [...this.watched];
     this.serverTime = this.now();
@@ -78,6 +88,11 @@ export class PodFeed {
   // 끝난 조치를 다음 판단 주기의 changes로 보내도록 넣어 둡니다.
   queueAction(item: ActionItem): void {
     this.pendingActions.push(item);
+  }
+
+  // 남긴 규칙 기록을 다음 판단 주기의 changes로 보내도록 넣어 둡니다.
+  queueRuleFiring(firing: RuleFiring): void {
+    this.pendingRuleFirings.push(firing);
   }
 
   // 판단(StatusMonitor.evaluate) 바로 뒤에 부릅니다. statusChanges는 evaluate가 돌려준 판단 변화입니다.
@@ -123,8 +138,19 @@ export class PodFeed {
       ),
       statusChanges: statusChanges.map(statusChangeItem),
       actions: this.pendingActions,
+      ruleFirings: this.pendingRuleFirings,
     };
     this.pendingActions = [];
+    this.pendingRuleFirings = [];
+
+    if (this.rules !== undefined) {
+      const view = this.rules.view();
+      const json = JSON.stringify(view);
+      if (json !== this.rulesJson) {
+        changes.rules = view;
+        this.rulesJson = json;
+      }
+    }
 
     const namespaces = this.namespaceList(entries.map((entry) => entry.pod));
     if (namespaces.join("\n") !== this.namespaces.join("\n")) {
@@ -231,6 +257,12 @@ export function filterChanges(
           actions: changes.actions.filter(
             (item) => item.target.namespace === namespace,
           ),
+          ruleFirings: changes.ruleFirings.filter(
+            (firing) => firing.target.namespace === namespace,
+          ),
+          ...(changes.rules === undefined
+            ? {}
+            : { rules: rulesIn(changes.rules, namespace) }),
           ...(changes.namespaces === undefined
             ? {}
             : { namespaces: changes.namespaces }),
@@ -242,6 +274,21 @@ export function filterChanges(
     filtered.removedDeployments.length === 0 &&
     filtered.statusChanges.length === 0 &&
     filtered.actions.length === 0 &&
+    filtered.ruleFirings.length === 0 &&
+    filtered.rules === undefined &&
     filtered.namespaces === undefined;
   return empty ? undefined : filtered;
+}
+
+// 한 namespace의 규칙만 남긴 보기입니다. 파일 상태는 그대로 둡니다. namespace가 없으면 전부입니다.
+export function rulesIn(
+  view: RulesView,
+  namespace: string | undefined,
+): RulesView {
+  return namespace === undefined
+    ? view
+    : {
+        file: view.file,
+        rules: view.rules.filter((rule) => rule.target.namespace === namespace),
+      };
 }

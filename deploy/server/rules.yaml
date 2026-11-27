@@ -1,0 +1,63 @@
+# Glasspod 자동 규칙입니다(design.md 5.5, docs/guides/T28.md).
+# 서버 Pod에 볼륨으로 붙어 /etc/glasspod/rules/rules.yaml이 되고, 서버가 5초마다 다시 읽습니다(server.yaml의 GLASSPOD_RULES_FILE).
+# 고친 뒤 kubectl apply -f deploy/server/rules.yaml로 바꿉니다. kubelet이 파일을 바꾸기까지 보통 1분 안팎 걸리고,
+# 서버를 다시 시작하지 않아도 됩니다. 틀린 파일이면 서버는 이전 규칙을 그대로 쓰고 화면('자동 규칙')과 로그(rules invalid)에 알립니다.
+#
+# 규칙 모양(packages/protocol/schema/rules.schema.json):
+#   name: 규칙 이름(DNS-1123). 조치 기록의 실행 주체와 격리 주석(rule:<이름>)에 남습니다.
+#   mode: off(기본, 보지 않음) | notify(알림만, 실행했을 것을 기록) | auto(자동 실행)
+#   target: { namespace, deployment } 이 Deployment가 만든 Pod를 봅니다.
+#   when: 조건 1~5개, 모두 맞을 때만(AND). 조건마다 for(지속 시간, 0s~1h)가 필요합니다.
+#     - status: [판단, ...]          서버의 판단(design.md 7.5)이 이 가운데 하나
+#     - outlier: 지표                 같은 Deployment의 다른 Pod보다 높음(design.md 7.6)
+#     - metric: 지표, above 또는 below  gauge는 마지막 값, counter와 event:error는 분당
+#   action: { restart: {} } | { isolate: {} } | { scale: { by, min, max } }  삭제는 하지 않습니다.
+#   cooldown: 발동한 뒤 쉬는 시간(30s~24h), maxPerHour: 최근 1시간 발동 상한(선택)
+# 서버는 한 판단 주기에 Deployment마다 규칙 하나만 발동하고, Pod 조치는 건강한 Pod가 원하는 replica 수의 절반 이상
+# 남을 때만, 트래픽에서 빼기는 그 Deployment에 격리된 Pod가 없을 때만, 스케일은 HPA가 없을 때만 합니다.
+#
+# 처음 배포에서는 아무것도 실행하지 않게 알림만·꺼짐으로 둡니다(docs/guides/T28.md 결정 25).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: glasspod-rules
+  namespace: glasspod
+  labels:
+    app: glasspod-server
+data:
+  rules.yaml: |
+    rules:
+      # 대표 시나리오(design.md 6장): 한 Pod만 요청이 느리면 트래픽에서 뺍니다.
+      - name: slow-pod-isolate
+        mode: notify
+        description: 요청 p99가 같은 Deployment의 다른 Pod보다 높은 채 30초가 지나면 트래픽에서 뺍니다.
+        target: { namespace: glasspod-demo, deployment: demo-app }
+        when:
+          - outlier: http.requests.duration_p99_ms
+            for: 30s
+        action: { isolate: {} }
+        cooldown: 10m
+        maxPerHour: 2
+
+      # 이벤트 루프가 막혀 지표가 오지 않으면 재시작합니다.
+      - name: stalled-restart
+        mode: notify
+        description: 앱 멈춤 의심이 30초 이어지면 재시작합니다.
+        target: { namespace: glasspod-demo, deployment: demo-app }
+        when:
+          - status: [stalled]
+            for: 30s
+        action: { restart: {} }
+        cooldown: 10m
+
+      # 큐가 쌓이면 replica를 하나 늘립니다(최대 5개). 조건은 Pod마다라 한 Pod라도 길면 맞습니다.
+      - name: queue-scale
+        mode: off
+        description: 큐 길이가 50을 넘은 채 1분이 지나면 replica를 1 늘립니다.
+        target: { namespace: glasspod-demo, deployment: demo-app }
+        when:
+          - metric: app.queue.length
+            above: 50
+            for: 1m
+        action: { scale: { by: 1, max: 5 } }
+        cooldown: 10m

@@ -25,6 +25,7 @@ import {
   formatDuration,
   formatMegabytes,
   formatMs,
+  outlierLabel,
 } from "../view/podText.js";
 
 export function IsolatedPage() {
@@ -103,7 +104,8 @@ export function IsolatedPage() {
       <p className="flex gap-2 rounded-xl bg-neutral-wash px-4 py-3 text-[13px] text-slate-600">
         <InfoIcon className="mt-0.5 size-4 shrink-0" />
         <span>
-          Pod 상세에서 '트래픽에서 빼기'를 실행하면 여기에 나타납니다.
+          Pod 상세에서 '트래픽에서 빼기'를 실행하거나 자동 규칙이 빼면 여기에
+          나타납니다.
         </span>
       </p>
 
@@ -180,6 +182,9 @@ function IsolatedCard({
           {isolation?.status === undefined
             ? "—"
             : STATUS_LABEL[isolation.status]}
+          {/* 그때 다른 Pod보다 높던 값입니다(docs/guides/T28.md 결정 21). */}
+          {isolation?.outliers !== undefined &&
+            ` · 다른 Pod보다 높음: ${isolation.outliers.map(outlierLabel).join(", ")}`}
         </Chip>
         <Chip label="실행">
           {isolation?.actor === undefined ? "—" : actorLabel(isolation.actor)}

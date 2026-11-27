@@ -23,6 +23,7 @@ import {
   mergeActions,
 } from "../view/actionText.js";
 import type { PodActionKind } from "../view/actionText.js";
+import { isFiringOn, mergeFirings } from "../view/ruleText.js";
 
 export function PodDetailPage() {
   // 라우트가 두 값을 모두 정하므로 비어 있을 수 없습니다.
@@ -66,9 +67,23 @@ export function PodDetailPage() {
       ]),
     [detailActions, streamActions, pod],
   );
+  // 자동 규칙 기록도 같은 방식으로 합칩니다(docs/guides/T28.md 결정 2).
+  const streamFirings = stream.state?.ruleFirings;
+  const detailFirings = data.detail?.ruleFirings;
+  const ruleFirings = useMemo(
+    () =>
+      mergeFirings([
+        detailFirings ?? [],
+        (streamFirings ?? []).filter((firing) => isFiringOn(firing, pod)),
+      ]),
+    [detailFirings, streamFirings, pod],
+  );
   const detail = useMemo(
-    () => (data.detail === undefined ? undefined : { ...data.detail, actions }),
-    [data.detail, actions],
+    () =>
+      data.detail === undefined
+        ? undefined
+        : { ...data.detail, actions, ruleFirings },
+    [data.detail, actions, ruleFirings],
   );
 
   return (

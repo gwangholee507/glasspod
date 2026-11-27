@@ -25,6 +25,8 @@ export const ISOLATION_ANNOTATIONS = {
   replicaSet: "glasspod/isolated-replicaset",
   // user 또는 rule:<이름>
   by: "glasspod/isolated-by",
+  // 격리할 때 다른 Pod보다 높던 값의 이름, JSON 배열(docs/guides/T28.md 결정 21). 없었으면 붙이지 않음
+  outliers: "glasspod/isolated-outliers",
 } as const;
 
 // Deployment가 ReplicaSet selector에 붙이는 라벨입니다. Service는 보통 이것으로 고르지 않으므로 마지막에 고릅니다.
@@ -73,6 +75,25 @@ function parseLabels(text: string | undefined): Record<string, string> {
   return labels;
 }
 
+function parseOutliers(text: string | undefined): string[] | undefined {
+  if (text === undefined) {
+    return undefined;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const names = value.filter(
+    (entry): entry is string => typeof entry === "string" && entry !== "",
+  );
+  return names.length === 0 ? undefined : names;
+}
+
 function parseActor(text: string | undefined): ActionActor | undefined {
   if (text === "user") {
     return { kind: "user" };
@@ -103,6 +124,7 @@ export function readIsolation(
   const deployment = nonEmpty(annotations[ISOLATION_ANNOTATIONS.deployment]);
   const replicaSet = nonEmpty(annotations[ISOLATION_ANNOTATIONS.replicaSet]);
   const actor = parseActor(annotations[ISOLATION_ANNOTATIONS.by]);
+  const outliers = parseOutliers(annotations[ISOLATION_ANNOTATIONS.outliers]);
   return {
     ...(Number.isFinite(at) ? { at } : {}),
     labels: parseLabels(annotations[ISOLATION_ANNOTATIONS.labels]),
@@ -110,6 +132,7 @@ export function readIsolation(
     ...(deployment === undefined ? {} : { deployment }),
     ...(replicaSet === undefined ? {} : { replicaSet }),
     ...(actor === undefined ? {} : { actor }),
+    ...(outliers === undefined ? {} : { outliers }),
   };
 }
 
@@ -221,6 +244,8 @@ export interface IsolationPatchInput {
   at: number;
   status: PodStatus | undefined;
   actor: ActionActor;
+  // 격리할 때 다른 Pod보다 높던 값의 이름입니다(T28 결정 21). 비었으면 주석을 붙이지 않습니다.
+  outliers?: readonly string[];
 }
 
 // merge patch 본문입니다. 뗄 라벨은 null로 지우고, 표시 라벨과 주석을 붙입니다.
@@ -244,6 +269,11 @@ export function isolationPatch(input: IsolationPatchInput): object {
   }
   if (plan.replicaSet !== undefined) {
     annotations[ISOLATION_ANNOTATIONS.replicaSet] = plan.replicaSet;
+  }
+  if (input.outliers !== undefined && input.outliers.length > 0) {
+    annotations[ISOLATION_ANNOTATIONS.outliers] = JSON.stringify(
+      input.outliers,
+    );
   }
   return {
     metadata: {

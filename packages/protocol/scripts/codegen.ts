@@ -30,6 +30,13 @@ const targets = [
     output: "snapshot.ts",
     schemaExport: "snapshotDataSchema",
   },
+  // 자동 규칙 파일입니다(docs/guides/T28.md 결정 5, 8). SDK 메시지가 아니라 서버 설정이지만 같은 방식으로 검증합니다.
+  {
+    schema: "rules.schema.json",
+    typeName: "RulesFile",
+    output: "rules.ts",
+    schemaExport: "rulesFileSchema",
+  },
 ] as const;
 
 function banner(sources: string): string {

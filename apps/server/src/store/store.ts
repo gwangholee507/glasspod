@@ -9,6 +9,7 @@ import type {
   PodRef,
   PodSeverity,
   PodStatus,
+  RuleFiring,
 } from "@glasspod/protocol";
 import type { PodSummary } from "../cluster.js";
 
@@ -116,6 +117,18 @@ export interface ActionQuery {
   pod?: PodRef;
 }
 
+// 자동 규칙 기록입니다(docs/guides/T28.md 결정 17). HTTP 본문과 같은 모양입니다.
+// 조치 기록처럼 30분 정리에서 빠지고, 서버 전체에서 최근 몇 건(메모리 어댑터는 1,000건)만 남깁니다.
+export type RuleFiringRecord = RuleFiring;
+
+// 규칙 기록을 거르는 조건입니다. 둘 다 주면 둘 다 맞는 것만입니다.
+export interface RuleFiringQuery {
+  // 규칙 대상의 namespace입니다.
+  namespace?: string;
+  // 조건이 맞은 Pod(RuleFiring.pod)입니다.
+  pod?: PodRef;
+}
+
 export interface PodRecords {
   // 받은 순서입니다.
   metrics: MetricsRecord[];
@@ -139,6 +152,7 @@ export interface StoreStats {
   statusChanges: number;
   kubeEvents: number;
   actions: number;
+  ruleFirings: number;
   // 상한을 넘어 버린 수입니다(서버가 시작된 뒤 누적).
   droppedMetrics: number;
   droppedEvents: number;
@@ -146,6 +160,7 @@ export interface StoreStats {
   droppedStatusChanges: number;
   droppedKubeEvents: number;
   droppedActions: number;
+  droppedRuleFirings: number;
 }
 
 export interface PruneResult {
@@ -165,6 +180,9 @@ export interface Store {
   addAction(record: ActionRecord): Promise<void>;
   // 남아 있는 조치 기록입니다. 요청한 순서(requestedAt)입니다.
   actions(query?: ActionQuery): Promise<ActionRecord[]>;
+  addRuleFiring(record: RuleFiringRecord): Promise<void>;
+  // 남아 있는 규칙 기록입니다. 발동한 순서(at)입니다.
+  ruleFirings(query?: RuleFiringQuery): Promise<RuleFiringRecord[]>;
   // since 이후(받은 시각, 연결·판단 변화는 at, 지워진 Pod는 deletedAt)의 Pod 하나의 기록입니다.
   podRecords(pod: PodRef, since: number): Promise<PodRecords>;
   // since 이후에 지워진 Pod입니다. 지워진 순서입니다.
@@ -175,7 +193,7 @@ export interface Store {
     namespace?: string,
   ): Promise<StatusChangeRecord[]>;
   stats(): Promise<StoreStats>;
-  // before보다 이른 기록을 지웁니다. 조치 기록은 지우지 않습니다.
+  // before보다 이른 기록을 지웁니다. 조치 기록과 규칙 기록은 지우지 않습니다.
   prune(before: number): Promise<PruneResult>;
   close(): Promise<void>;
 }

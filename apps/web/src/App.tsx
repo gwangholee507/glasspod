@@ -5,6 +5,7 @@ import { IsolatedPage } from "./pages/IsolatedPage.js";
 import { NotFoundPage } from "./pages/NotFoundPage.js";
 import { OverviewPage } from "./pages/OverviewPage.js";
 import { PodDetailPage } from "./pages/PodDetailPage.js";
+import { RulesPage } from "./pages/RulesPage.js";
 import { Shell } from "./shell/Shell.js";
 
 export function App() {
@@ -17,6 +18,8 @@ export function App() {
         <Route path="actions" element={<ActionsPage />} />
         {/* 격리된 Pod도 가운데 목록 칸 없이 넓게 씁니다(docs/guides/T23.md 결정 18). */}
         <Route path="isolated" element={<IsolatedPage />} />
+        {/* 자동 규칙도 가운데 목록 칸 없이 넓게 씁니다(docs/guides/T28.md 결정 2). */}
+        <Route path="rules" element={<RulesPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>

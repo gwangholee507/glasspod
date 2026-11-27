@@ -7,6 +7,7 @@ import {
   MAX_EVENTS_PER_POD,
   MAX_KUBE_EVENTS_PER_POD,
   MAX_METRICS_PER_POD,
+  MAX_RULE_FIRINGS,
   MAX_STATUS_CHANGES_PER_POD,
   MemoryStore,
 } from "./memory.js";
@@ -15,6 +16,7 @@ import type {
   EventRecord,
   KubeEventRecord,
   MetricsRecord,
+  RuleFiringRecord,
   StatusChangeRecord,
 } from "./store.js";
 
@@ -340,5 +342,58 @@ describe("MemoryStore actions", () => {
     const stats = await store.stats();
     expect(stats.actions).toBe(MAX_ACTIONS);
     expect(stats.droppedActions).toBe(3);
+  });
+});
+
+describe("MemoryStore rule firings", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  function firing(id: string, at: number, pod: PodRef = POD): RuleFiringRecord {
+    return {
+      id,
+      rule: "stalled-restart",
+      mode: "notify",
+      at,
+      action: "restart-pod",
+      target: { kind: "pod", ...pod, uid: `uid-${pod.name}` },
+      pod,
+      deployment: "orders",
+      conditions: [],
+      outcome: "notified",
+    };
+  }
+
+  it("keeps firings in firing order even when an auto firing arrives late", async () => {
+    const store = new MemoryStore();
+    await store.addRuleFiring(firing("a", 10));
+    await store.addRuleFiring(firing("c", 30, OTHER));
+    // 자동 실행은 조치가 끝난 뒤 들어오지만 자리는 발동한 시각입니다.
+    await store.addRuleFiring(firing("b", 20));
+    expect((await store.ruleFirings()).map((item) => item.id)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+    expect(
+      (await store.ruleFirings({ pod: OTHER })).map((item) => item.id),
+    ).toEqual(["c"]);
+    expect(await store.ruleFirings({ namespace: "pay" })).toEqual([]);
+  });
+
+  it("keeps the latest firings only and is not pruned by the 30-minute rule", async () => {
+    const store = new MemoryStore();
+    for (let index = 0; index < MAX_RULE_FIRINGS + 2; index += 1) {
+      await store.addRuleFiring(firing(`f${index}`, index));
+    }
+    await store.prune(Number.MAX_SAFE_INTEGER);
+    const firings = await store.ruleFirings();
+    expect(firings).toHaveLength(MAX_RULE_FIRINGS);
+    expect(firings[0]?.at).toBe(2);
+    expect(await store.stats()).toMatchObject({
+      ruleFirings: MAX_RULE_FIRINGS,
+      droppedRuleFirings: 2,
+    });
   });
 });

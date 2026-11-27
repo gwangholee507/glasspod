@@ -1,5 +1,6 @@
 // 왼쪽 메뉴입니다: 로고, namespace 고르기, 메뉴, 실시간 연결 상태(docs/guides/T18.md 결정 2, 3, 6, 19).
-// '조치 기록'은 /actions(docs/guides/T21.md 결정 19), '격리된 Pod'는 /isolated(docs/guides/T23.md 결정 20)로 갑니다.
+// '조치 기록'은 /actions(docs/guides/T21.md 결정 19), '격리된 Pod'는 /isolated(docs/guides/T23.md 결정 20),
+// '자동 규칙'은 /rules(docs/guides/T28.md 결정 2)로 갑니다.
 import { Link } from "react-router";
 import type { PodStreamStatus } from "../api/podStream.js";
 import {
@@ -7,12 +8,18 @@ import {
   HistoryIcon,
   IsolateIcon,
   ListIcon,
+  RuleIcon,
 } from "../ui/icons.js";
 import { formatDuration } from "../view/podText.js";
-import { actionsLink, isolatedLink, overviewLink } from "./shellContext.js";
+import {
+  actionsLink,
+  isolatedLink,
+  overviewLink,
+  rulesLink,
+} from "./shellContext.js";
 
 // 지금 고른 메뉴입니다.
-export type SidebarSection = "pods" | "isolated" | "actions";
+export type SidebarSection = "pods" | "isolated" | "actions" | "rules";
 
 const MENU_CURRENT =
   "flex items-center gap-3 rounded-lg bg-mist px-3 py-2 font-semibold text-deep-teal";
@@ -121,6 +128,14 @@ export function Sidebar({
         >
           <HistoryIcon />
           <span className="flex-1">조치 기록</span>
+        </Link>
+        <Link
+          to={rulesLink(namespace)}
+          aria-current={current === "rules" ? "page" : undefined}
+          className={current === "rules" ? MENU_CURRENT : MENU_OTHER}
+        >
+          <RuleIcon />
+          <span className="flex-1">자동 규칙</span>
         </Link>
       </nav>
 

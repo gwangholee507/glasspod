@@ -27,3 +27,14 @@ describe("loadConfig action namespaces", () => {
     ).toThrow(/GLASSPOD_ACTION_NAMESPACES must be a comma-separated list/);
   });
 });
+
+describe("loadConfig rules file", () => {
+  it("turns rules off without GLASSPOD_RULES_FILE and reads the path", () => {
+    expect(loadConfig({}).rulesFile).toBeUndefined();
+    expect(loadConfig({ GLASSPOD_RULES_FILE: " " }).rulesFile).toBeUndefined();
+    expect(
+      loadConfig({ GLASSPOD_RULES_FILE: "/etc/glasspod/rules/rules.yaml" })
+        .rulesFile,
+    ).toBe("/etc/glasspod/rules/rules.yaml");
+  });
+});

@@ -82,6 +82,7 @@ function detail(fields: Partial<PodDetailBody> = {}): PodDetailBody {
     statusChanges: [],
     kubeEvents: [],
     actions: [],
+    ruleFirings: [],
     ...fields,
   };
 }
@@ -103,6 +104,48 @@ describe("shortInstance", () => {
 });
 
 describe("whatHappened", () => {
+  it("puts rule firings on top at the same time", () => {
+    const { rows } = whatHappened(
+      detail({
+        ruleFirings: [
+          {
+            id: "f1",
+            rule: "stalled-restart",
+            mode: "notify",
+            at: 40_000,
+            action: "restart-pod",
+            target: { kind: "pod", namespace: "shop", name: "a", uid: "u" },
+            pod: { namespace: "shop", name: "a" },
+            deployment: "orders",
+            conditions: [
+              {
+                condition: {
+                  signal: "status",
+                  statuses: ["stalled"],
+                  forMs: 30_000,
+                },
+                since: 10_000,
+                status: "stalled",
+              },
+            ],
+            outcome: "notified",
+          },
+        ],
+      }),
+      item(),
+    );
+    expect(rows[0]).toEqual({
+      key: "rule/f1",
+      at: 40_000,
+      kind: "rule",
+      tone: "neutral",
+      label: "규칙",
+      title: "stalled-restart · 알림만 · 실행했을 것",
+      detail:
+        "알림만이라 실행하지 않았습니다. 자동이었으면 재시작했을 것입니다. 조건: 판단 앱 멈춤 의심",
+    });
+  });
+
   it("merges every kind of row, latest first, and numbers restart causes", () => {
     const timeout = event({
       seq: 7,

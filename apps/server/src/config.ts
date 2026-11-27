@@ -18,6 +18,9 @@ export interface ServerConfig {
   kubeContext: string | undefined;
   // 기록을 둘 저장소입니다(docs/guides/T11.md). 지금은 memory뿐입니다.
   store: StoreKind;
+  // 자동 규칙 파일(YAML)의 경로입니다. 없으면 규칙이 꺼져 있습니다(docs/guides/T28.md 결정 1).
+  // 클러스터에서는 ConfigMap glasspod-rules를 붙인 /etc/glasspod/rules/rules.yaml입니다.
+  rulesFile: string | undefined;
 }
 
 // 쿠버네티스 namespace 이름 규칙(DNS-1123 label)입니다.
@@ -155,5 +158,6 @@ export function loadConfig(env: Env): ServerConfig {
     actionNamespaces: readActionNamespaces(env, namespaces),
     kubeContext: readOptionalText(env, "GLASSPOD_KUBE_CONTEXT"),
     store: readChoice(env, "GLASSPOD_STORE", STORE_KINDS, "memory"),
+    rulesFile: readOptionalText(env, "GLASSPOD_RULES_FILE"),
   };
 }
