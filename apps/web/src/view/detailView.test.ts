@@ -276,6 +276,59 @@ describe("whatHappened", () => {
     expect(truncated).toBe(true);
   });
 
+  it("names the unhandled crash by origin and treats a new pod's first ok as first", () => {
+    const body = detail({
+      events: [
+        event({
+          seq: 1,
+          message: "demo crash: uncaught exception",
+          data: {
+            errorType: "DemoCrashError",
+            origin: "uncaughtException",
+            fatal: true,
+          },
+        }),
+        event({
+          seq: 2,
+          message: "demo crash: unhandled rejection",
+          data: {
+            errorType: "DemoCrashError",
+            origin: "unhandledRejection",
+            fatal: true,
+          },
+        }),
+      ],
+      statusChanges: [
+        { pod: POD, at: 1_000, status: "starting", severity: "none" },
+        {
+          pod: POD,
+          at: 2_000,
+          status: "not-ready",
+          severity: "warning",
+          previous: "starting",
+        },
+        {
+          pod: POD,
+          at: 3_000,
+          status: "ok",
+          severity: "none",
+          previous: "not-ready",
+        },
+      ],
+    });
+    const byTitle = new Map(
+      whatHappened(body, item()).rows.map((row) => [row.title, row]),
+    );
+    expect(
+      byTitle.get("DemoCrashError: demo crash: uncaught exception")?.detail,
+    ).toBe("처리되지 않은 예외 · 이전 instance 3f9c…a21");
+    expect(
+      byTitle.get("DemoCrashError: demo crash: unhandled rejection")?.detail,
+    ).toBe("처리되지 않은 Promise 거부 · 이전 instance 3f9c…a21");
+    expect(byTitle.has("이상 신호가 없습니다.")).toBe(true);
+    expect(byTitle.has("다시 정상입니다.")).toBe(false);
+  });
+
   it("adds a row for each action on this pod", () => {
     const body = detail({
       actions: [

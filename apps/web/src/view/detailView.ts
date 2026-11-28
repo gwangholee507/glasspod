@@ -16,7 +16,12 @@ import {
   actorLabel,
   isIsolation,
 } from "./actionText.js";
-import { changeSentence, formatMs, statusTone } from "./podText.js";
+import {
+  changeSentence,
+  firstOkChanges,
+  formatMs,
+  statusTone,
+} from "./podText.js";
 import type { Tone } from "./podText.js";
 import {
   MODE_LABEL,
@@ -110,8 +115,14 @@ function eventRow(
   let title: string;
   if (event.name === "exception") {
     title = `${stringField(event.data, "errorType") ?? "Error"}: ${event.message ?? ""}`;
-    if (stringField(event.data, "origin") !== undefined) {
-      parts.push("처리되지 않은 예외");
+    // SDK가 프로세스의 uncaughtExceptionMonitor에서 보낸 것입니다. Promise 거부는 origin이 unhandledRejection입니다(T27).
+    const origin = stringField(event.data, "origin");
+    if (origin !== undefined) {
+      parts.push(
+        origin === "unhandledRejection"
+          ? "처리되지 않은 Promise 거부"
+          : "처리되지 않은 예외",
+      );
     }
   } else if (event.name === "state") {
     title = event.message ?? event.name;
@@ -216,6 +227,7 @@ export function whatHappened(
       ...(parts.length === 0 ? {} : { detail: parts.join(" · ") }),
     });
   }
+  const firstOk = firstOkChanges(detail.statusChanges);
   for (const change of detail.statusChanges) {
     rows.push({
       key: `status/${change.at}/${change.status}`,
@@ -223,7 +235,7 @@ export function whatHappened(
       kind: "status",
       tone: statusTone(change.status),
       label: "판단",
-      title: changeSentence(change),
+      title: changeSentence(change, firstOk.has(change)),
       status:
         change.previous === undefined
           ? { next: change.status }

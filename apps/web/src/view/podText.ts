@@ -272,7 +272,35 @@ export function podSentence(item: PodItem, now: number): string {
 }
 
 // 타임라인 한 줄의 문장('~습니다')입니다. 판단 변화 기록에는 재시작의 종료 코드가 없으므로 이유만 씁니다.
-export function changeSentence(change: PodStatusChange): string {
+// 판단 변화 목록에서 새 Pod가 처음 정상이 된 변화를 고릅니다(docs/guides/T27.md). 시작 중을 본 뒤 정상인 적이 없던 Pod가
+// 정상이 된 것이라, 앞 판단이 준비 안 됨(readiness 대기)이어도 '다시'가 아닙니다. 목록의 순서는 상관없습니다.
+export function firstOkChanges(
+  changes: readonly PodStatusChange[],
+): Set<PodStatusChange> {
+  const first = new Set<PodStatusChange>();
+  // Pod마다 시작 중을 본 뒤 아직 정상이 된 적이 없는지입니다.
+  const fresh = new Map<string, boolean>();
+  for (const change of [...changes].sort((a, b) => a.at - b.at)) {
+    const key = `${change.pod.namespace}/${change.pod.name}`;
+    if (change.status === "starting") {
+      fresh.set(key, true);
+    } else if (change.status === "ok") {
+      if (fresh.get(key) === true) {
+        first.add(change);
+      }
+      fresh.set(key, false);
+    } else if (change.previous === "ok") {
+      fresh.set(key, false);
+    }
+  }
+  return first;
+}
+
+// firstOk는 firstOkChanges가 고른 변화인지입니다.
+export function changeSentence(
+  change: PodStatusChange,
+  firstOk = false,
+): string {
   switch (change.status) {
     case "terminated":
       switch (change.reason) {
@@ -306,8 +334,9 @@ export function changeSentence(change: PodStatusChange): string {
     case "no-sdk":
       return "SDK가 붙지 않은 Pod입니다.";
     case "ok":
-      // 새 Pod가 처음 정상이 된 것(시작 중, SDK가 아직 붙지 않음)은 '다시'가 아닙니다(docs/guides/T26.md).
-      return change.previous === undefined ||
+      // 새 Pod가 처음 정상이 된 것(시작 중, SDK가 아직 붙지 않음, T26. 시작 중 → 준비 안 됨 → 정상, T27)은 '다시'가 아닙니다.
+      return firstOk ||
+        change.previous === undefined ||
         change.previous === "starting" ||
         change.previous === "no-sdk"
         ? "이상 신호가 없습니다."

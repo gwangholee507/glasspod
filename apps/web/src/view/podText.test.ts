@@ -2,6 +2,7 @@ import type { PodItem, PodOutlier, PodStatusChange } from "@glasspod/protocol";
 import { describe, expect, it } from "vitest";
 import {
   changeSentence,
+  firstOkChanges,
   formatClock,
   formatDuration,
   formatMegabytes,
@@ -314,6 +315,39 @@ describe("podSentence", () => {
   });
 });
 
+describe("firstOkChanges", () => {
+  it("새 Pod가 시작 중을 지나 처음 정상이 된 변화만 고름", () => {
+    const other = { namespace: "shop", name: "web-2" };
+    const started = change({ at: 1, status: "starting", severity: "none" });
+    const notReady = change({
+      at: 2,
+      status: "not-ready",
+      severity: "warning",
+      previous: "starting",
+    });
+    const firstOk = change({ at: 3, previous: "not-ready" });
+    const blocked = change({
+      at: 4,
+      status: "not-ready",
+      severity: "warning",
+      previous: "ok",
+    });
+    const againOk = change({ at: 5, previous: "not-ready" });
+    // 시작을 보지 못한 Pod(30분 창 밖에서 시작)는 '다시'로 둠
+    const unknownOk = change({ pod: other, at: 3, previous: "not-ready" });
+    // 순서와 상관없음(목록은 늦은 것부터 올 수 있음)
+    const picked = firstOkChanges([
+      againOk,
+      unknownOk,
+      blocked,
+      firstOk,
+      notReady,
+      started,
+    ]);
+    expect([...picked]).toEqual([firstOk]);
+  });
+});
+
 describe("changeSentence", () => {
   it("판단 변화를 '~습니다' 문장으로", () => {
     expect(
@@ -344,6 +378,13 @@ describe("changeSentence", () => {
     );
     expect(changeSentence(change({ previous: "no-sdk" }))).toBe(
       "이상 신호가 없습니다.",
+    );
+    // 시작 중 → 준비 안 됨 → 정상(docs/guides/T27.md)
+    expect(changeSentence(change({ previous: "not-ready" }), true)).toBe(
+      "이상 신호가 없습니다.",
+    );
+    expect(changeSentence(change({ previous: "not-ready" }), false)).toBe(
+      "다시 정상입니다.",
     );
     expect(
       changeSentence(change({ status: "disconnected", severity: "critical" })),

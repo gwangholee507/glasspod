@@ -80,9 +80,11 @@ export function SnapshotPanel({
         >
           <CameraIcon className="size-4 text-glass-cyan" />
           snapshot
-          {asked !== undefined && ok !== undefined && (
+          {/* 실패한 답에도 시각을 붙여, 지난 실패가 지금 일처럼 보이지 않게 합니다(T27). */}
+          {asked !== undefined && (
             <span className="font-mono text-xs font-normal text-slate-500">
-              {formatClock(asked.at)} · {ok.elapsedMs} ms
+              {formatClock(asked.at)}
+              {ok === undefined ? "" : ` · ${ok.elapsedMs} ms`}
             </span>
           )}
         </h2>

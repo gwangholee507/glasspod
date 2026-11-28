@@ -12,6 +12,7 @@ import type {
 import {
   STATUS_LABEL,
   STATUS_ORDER,
+  firstOkChanges,
   severityRank,
   statusTone,
 } from "./podText.js";
@@ -404,7 +405,8 @@ export function mergeStatusChanges(
 // ── 한눈에 보기: 판단 변화와 조치를 한 줄씩 섞기(docs/guides/T21.md 결정 21) ──
 
 export type OverviewEntry =
-  | { kind: "status"; at: number; change: PodStatusChange }
+  // firstOk는 새 Pod가 처음 정상이 된 변화입니다(podText.ts의 firstOkChanges, T27).
+  | { kind: "status"; at: number; change: PodStatusChange; firstOk?: true }
   | { kind: "action"; at: number; action: ActionItem }
   | { kind: "rule"; at: number; firing: RuleFiring };
 
@@ -419,6 +421,7 @@ export function mergeOverviewTimeline(
 ): { entries: OverviewEntry[]; truncated: boolean } {
   const since = now - TIMELINE_WINDOW_MS;
   const { changes } = mergeStatusChanges(changeLists, now, Infinity);
+  const firstOk = firstOkChanges(changes);
   const entries: OverviewEntry[] = [
     ...firings
       .filter((firing) => firing.at >= since)
@@ -438,6 +441,7 @@ export function mergeOverviewTimeline(
       kind: "status",
       at: change.at,
       change,
+      ...(firstOk.has(change) ? { firstOk: true as const } : {}),
     })),
   ];
   // 안정 정렬이라 같은 시각이면 조치(앞에 넣음)가 먼저, 판단 변화끼리는 mergeStatusChanges의 순서가 남습니다.

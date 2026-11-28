@@ -175,6 +175,7 @@ export function OverviewPage() {
                 <TimelineRow
                   key={`${entry.change.pod.namespace}/${entry.change.pod.name}/${entry.change.at}/${entry.change.status}`}
                   change={entry.change}
+                  firstOk={entry.firstOk === true}
                   namespace={namespace}
                   showNamespace={showNamespace}
                 />
@@ -313,10 +314,12 @@ function DeploymentCard({
 
 function TimelineRow({
   change,
+  firstOk,
   namespace,
   showNamespace,
 }: {
   change: PodStatusChange;
+  firstOk: boolean;
   namespace: string | undefined;
   showNamespace: boolean;
 }) {
@@ -356,7 +359,7 @@ function TimelineRow({
           <StatusBadge status={change.status} />
         </div>
         <p className="mt-1.5 text-[13px] text-slate-700">
-          {changeSentence(change)}
+          {changeSentence(change, firstOk)}
         </p>
       </div>
     </li>

@@ -431,6 +431,15 @@ SDK (앱 안)                         서버
 
 snapshot 요청이 응답 없음(504)으로 끝난 것은 판단에 쓰지 않고 상세 화면에만 보여 줍니다. snapshot은 개발자가 상세 화면을 열 때만 요청하므로 주기적인 신호가 아닙니다(2026-11-14).
 
+시나리오 점검(2026-11-28, `docs/guides/T27.md`): 로컬 클러스터의 클러스터 안 서버와 데모 앱(Pod 3개, 부하 초당 20건)으로 판단을 화면까지 확인했습니다.
+
+- 이벤트 루프 막힘(20초): 10초에 readiness 실패로 `not-ready`, 마지막 metrics부터 15초에 `stalled`, 풀리면 `ok`. SDK 연결은 끊기지 않고, 막힌 동안 snapshot은 504, `lag_max_ms`가 약 20,000 ms(p99는 그대로).
+- 예외 폭주(초당 50): 판단은 `ok` 그대로, 약 25초 뒤 예외/분 강조. 서로 다른 예외 100가지면 SDK가 1분 한도(120)를 지켜 서버가 받는 메시지는 분당 120건이고, 묶어 둔 것을 늦게 보내 끈 뒤 강조가 약 100초 남습니다.
+- 크래시: 처리되지 않은 예외와 Promise 거부 모두 `fatal` event(`origin` `uncaughtException`·`unhandledRejection`)가 연결이 닫히기 전에 서버에 도착해 원인 후보 1번이 됩니다. `disconnected`(1~2초) → `restarted`(Error, exit 1). 연달아 죽으면 kubelet 대기 동안 `pod-failing`(`CrashLoopBackOff`, 두 번째 약 15초, 세 번째 약 25초).
+- OOM(초당 2MB): 약 45초 뒤 힙 강조, 약 110초 뒤 `OOMKilled`(137)로 `restarted`. SIGKILL이라 SDK는 마지막 event를 보내지 못해 원인 후보는 그 전 event뿐이고, 단서는 힙 그래프입니다.
+- 서버 재시작: SDK가 7~8초 안에 다시 붙고, 끊긴 동안 보낼 차례가 된 event는 원래 `ts`로 도착합니다. 앞의 기록은 사라지고(D1), 쿠버네티스 재시작 정보는 다시 `restarted`로 보입니다.
+- 알려진 한계: 서버는 마지막 metrics부터의 시간을 벽시계로 잽니다. 노드 시계가 앞으로 뛰면(Docker Desktop을 켠 직후 약 5분) 모든 Pod가 다음 metrics까지 몇 초 동안 `stalled`가 됩니다.
+
 ### 7.6 서버의 지표 비교
 
 서버는 판단(7.5)과 따로 같은 Deployment의 다른 Pod보다 지표가 눈에 띄게 높은 Pod를 찾습니다(2026-11-25, `docs/guides/T34.md`). 판단은 한 Pod에 하나라 재시작 같은 판단과 겹치면 가려지므로, 목록 항목의 `outliers`(높은 값마다 이 Pod 값, 다른 Pod 중앙값, 비교한 Pod 수, 시작 시각)로 따로 보냅니다.

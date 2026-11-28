@@ -507,6 +507,44 @@ describe("mergeOverviewTimeline", () => {
     ]);
   });
 
+  it("새 Pod가 처음 정상이 된 줄에 firstOk를 붙임(T27)", () => {
+    const pod = { namespace: "shop", name: "new" };
+    const { entries } = mergeOverviewTimeline(
+      [
+        [
+          { pod, at: NOW - 3_000, status: "starting", severity: "none" },
+          {
+            pod,
+            at: NOW - 2_000,
+            status: "not-ready",
+            severity: "warning",
+            previous: "starting",
+          },
+          {
+            pod,
+            at: NOW - 1_000,
+            status: "ok",
+            severity: "none",
+            previous: "not-ready",
+          },
+        ],
+      ],
+      [],
+      NOW,
+    );
+    expect(
+      entries.map((entry) =>
+        entry.kind === "status"
+          ? [entry.change.status, entry.firstOk ?? false]
+          : [],
+      ),
+    ).toEqual([
+      ["ok", true],
+      ["not-ready", false],
+      ["starting", false],
+    ]);
+  });
+
   it("limit줄까지", () => {
     const { entries, truncated } = mergeOverviewTimeline(
       [[change]],
